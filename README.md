@@ -145,3 +145,6 @@ Python syntax. There is no project-owned Python dependency graph to audit:
 ComfyUI supplies Python, PyTorch, and NumPy. A real ComfyUI launch remains the
 final environment-specific confirmation because the custom nodes intentionally
 depend on ComfyUI's own runtime.
+
+`cargo audit` is an optional maintainer check provided by `cargo-audit`; it is
+not installed or required by either setup script or at runtime.
