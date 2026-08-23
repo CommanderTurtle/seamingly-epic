@@ -300,3 +300,76 @@ fn resolve_path(base: &Path, path: &Path) -> PathBuf {
         base.join(path)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{GridSpec, SeamSpec, TransferFunction};
+
+    #[test]
+    fn corrects_float32_batches_without_touching_alpha() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.f32");
+        let output = directory.path().join("output.f32");
+        let report = directory.path().join("report.json");
+        let descriptor_path = directory.path().join("descriptor.json");
+        let (width, height, channels) = (64_u32, 32_u32, 4_usize);
+        let mut bytes = Vec::new();
+        for _y in 0..height {
+            for x in 0..width {
+                let value = if x < width / 2 { 0.30_f32 } else { 0.39_f32 };
+                for channel in [value, value, value, 0.75_f32] {
+                    bytes.extend_from_slice(&channel.to_le_bytes());
+                }
+            }
+        }
+        fs::write(&input, &bytes).unwrap();
+        let descriptor = RawF32Descriptor {
+            input: input.clone(),
+            output: output.clone(),
+            width,
+            height,
+            batch: 1,
+            channels,
+            config: CorrectionConfig {
+                seams: SeamSpec {
+                    grid: Some(GridSpec {
+                        columns: 2,
+                        rows: 1,
+                    }),
+                    ..SeamSpec::default()
+                },
+                scan_radius: 4,
+                refine_radius: 0,
+                sample_stride: 1,
+                blend_width: 0,
+                local_strength: 0.0,
+                min_confidence: 0.05,
+                transfer: TransferFunction::Linear,
+                ..CorrectionConfig::default()
+            },
+            report: Some(report.clone()),
+        };
+        fs::write(
+            &descriptor_path,
+            serde_json::to_vec_pretty(&descriptor).unwrap(),
+        )
+        .unwrap();
+
+        let reports = correct_raw_f32(&descriptor_path).unwrap();
+        assert!(reports[0].applied);
+        assert!(report.is_file());
+        let corrected = fs::read(output).unwrap();
+        assert_ne!(corrected, bytes);
+        for (original, result) in bytes
+            .chunks_exact(channels * size_of::<f32>())
+            .zip(corrected.chunks_exact(channels * size_of::<f32>()))
+        {
+            let alpha_offset = 3 * size_of::<f32>();
+            assert_eq!(
+                &original[alpha_offset..alpha_offset + size_of::<f32>()],
+                &result[alpha_offset..alpha_offset + size_of::<f32>()]
+            );
+        }
+    }
+}

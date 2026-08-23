@@ -40,6 +40,16 @@ pub fn correct_png(
     let input = input.as_ref();
     let output = output.as_ref();
     ensure!(input != output, "input and output paths must be different");
+    if output.exists() {
+        ensure!(
+            fs::canonicalize(input).with_context(|| {
+                format!("could not resolve input path: {}", input.display())
+            })? != fs::canonicalize(output).with_context(|| {
+                format!("could not resolve output path: {}", output.display())
+            })?,
+            "input and output resolve to the same file"
+        );
+    }
     if output.exists() && !overwrite {
         bail!(
             "output already exists: {} (pass --overwrite to replace it)",
@@ -437,4 +447,138 @@ fn absolute_parent(path: &Path) -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .context("output path has no parent directory")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::BufWriter;
+
+    use super::*;
+    use crate::config::{GridSpec, SeamSpec};
+
+    #[test]
+    fn round_trips_alpha_and_comfy_text_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input.png");
+        let output = directory.path().join("output.png");
+        let (width, height) = (64_u32, 32_u32);
+        let mut source = Vec::with_capacity(width as usize * height as usize * 4);
+        let mut alpha = Vec::with_capacity(width as usize * height as usize);
+        for y in 0..height {
+            for x in 0..width {
+                let value = if x < width / 2 { 80 } else { 104 };
+                let pixel_alpha = ((x + y * 3) % 251 + 4) as u8;
+                source.extend_from_slice(&[value, value, value, pixel_alpha]);
+                alpha.push(pixel_alpha);
+            }
+        }
+        {
+            let file = File::create(&input).unwrap();
+            let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+            encoder.set_color(ColorType::Rgba);
+            encoder.set_depth(BitDepth::Eight);
+            encoder
+                .add_text_chunk("workflow".to_owned(), "{\"nodes\":[]}".to_owned())
+                .unwrap();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&source)
+                .unwrap();
+        }
+
+        let config = CorrectionConfig {
+            seams: SeamSpec {
+                grid: Some(GridSpec {
+                    columns: 2,
+                    rows: 1,
+                }),
+                ..SeamSpec::default()
+            },
+            scan_radius: 4,
+            refine_radius: 0,
+            sample_stride: 1,
+            blend_width: 0,
+            local_strength: 0.0,
+            min_confidence: 0.05,
+            transfer: TransferFunction::Linear,
+            ..CorrectionConfig::default()
+        };
+        let report = correct_png(&input, &output, &config, false).unwrap();
+        assert!(report.applied);
+
+        let file = File::open(&output).unwrap();
+        let mut reader = png::Decoder::new(BufReader::new(file)).read_info().unwrap();
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        let output_info = reader.next_frame(&mut decoded).unwrap();
+        decoded.truncate(output_info.buffer_size());
+        reader.finish().unwrap();
+        assert_eq!(reader.info().bit_depth, BitDepth::Eight);
+        assert_eq!(reader.info().color_type, ColorType::Rgba);
+        assert!(
+            reader
+                .info()
+                .uncompressed_latin1_text
+                .iter()
+                .any(|chunk| chunk.keyword == "workflow")
+        );
+        let output_alpha: Vec<u8> = decoded.chunks_exact(4).map(|pixel| pixel[3]).collect();
+        assert_eq!(output_alpha, alpha);
+        assert_ne!(decoded, source);
+    }
+
+    #[test]
+    fn retains_sixteen_bit_samples() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("input16.png");
+        let output = directory.path().join("output16.png");
+        let (width, height) = (32_u32, 16_u32);
+        let mut source = Vec::with_capacity(width as usize * height as usize * 6);
+        for _y in 0..height {
+            for x in 0..width {
+                let value = if x < width / 2 {
+                    20_000_u16
+                } else {
+                    24_000_u16
+                };
+                for _channel in 0..3 {
+                    source.extend_from_slice(&value.to_be_bytes());
+                }
+            }
+        }
+        {
+            let file = File::create(&input).unwrap();
+            let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(BitDepth::Sixteen);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&source)
+                .unwrap();
+        }
+        let config = CorrectionConfig {
+            seams: SeamSpec {
+                grid: Some(GridSpec {
+                    columns: 2,
+                    rows: 1,
+                }),
+                ..SeamSpec::default()
+            },
+            scan_radius: 3,
+            refine_radius: 0,
+            sample_stride: 1,
+            blend_width: 0,
+            local_strength: 0.0,
+            min_confidence: 0.05,
+            transfer: TransferFunction::Linear,
+            ..CorrectionConfig::default()
+        };
+        correct_png(&input, &output, &config, false).unwrap();
+        let reader = png::Decoder::new(BufReader::new(File::open(&output).unwrap()))
+            .read_info()
+            .unwrap();
+        assert_eq!(reader.info().bit_depth, BitDepth::Sixteen);
+        assert_eq!(reader.info().color_type, ColorType::Rgb);
+    }
 }

@@ -433,20 +433,13 @@ def _box_blur(value: torch.Tensor, radius: int, passes: int) -> torch.Tensor:
     kernel = 2 * radius + 1
     result = value
     for _ in range(passes):
-        result = functional.avg_pool2d(
-            result,
-            (1, kernel),
-            stride=1,
-            padding=(0, radius),
-            count_include_pad=False,
-        )
-        result = functional.avg_pool2d(
-            result,
-            (kernel, 1),
-            stride=1,
-            padding=(radius, 0),
-            count_include_pad=False,
-        )
+        # Prefix sums make each broad pass O(pixels), independent of radius.
+        horizontal = functional.pad(result, (radius, radius, 0, 0), mode="replicate")
+        horizontal = functional.pad(horizontal.cumsum(dim=-1), (1, 0, 0, 0))
+        result = (horizontal[..., kernel:] - horizontal[..., :-kernel]) / kernel
+        vertical = functional.pad(result, (0, 0, radius, radius), mode="replicate")
+        vertical = functional.pad(vertical.cumsum(dim=-2), (0, 0, 1, 0))
+        result = (vertical[..., kernel:, :] - vertical[..., :-kernel, :]) / kernel
     return result
 
 
