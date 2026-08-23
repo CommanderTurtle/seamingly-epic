@@ -80,6 +80,13 @@ must be even and fit when centered on its supplied seam. No registration or
 resizing fallback exists. An existing output is refused unless `--overwrite`
 is supplied.
 
+The command has no feather-width control. Distant matches are used only to
+retain the cross render's light balance at the seam. A separate nearest-
+agreement walk derives the visible alpha support automatically. For the
+standard 4096-pixel cross short axis, that support can never extend more than
+256 pixels from the seam and will end sooner wherever the reference and base
+already agree. Pixels outside it come directly from `--in`.
+
 `raw-f32` is the machine interface used by the ComfyUI IMAGE node. It consumes
 a JSON descriptor for little-endian, contiguous `[B,H,W,C]` float32 files. It is
 documented so other local tools can use the same zero-quantization path, but

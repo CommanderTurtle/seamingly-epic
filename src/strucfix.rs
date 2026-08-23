@@ -2,9 +2,9 @@
 //!
 //! The portrait reference crosses the base image's vertical join without a
 //! vertical tile boundary. The landscape reference does the analogous job for
-//! the horizontal join. Four adaptive outer stitch curves keep each reference
-//! confined to the central cross and raised-cosine weights prevent those
-//! curves from becoming new visible boundaries.
+//! the horizontal join. Distant correspondence samples estimate light balance
+//! without defining visible coverage. Four nearest-agreement support curves
+//! confine the actual reference pixels to a narrow, raised-cosine alpha cross.
 
 use std::{f64::consts::PI, fs, path::Path};
 
@@ -77,8 +77,10 @@ struct CrossGeometry {
 struct VerticalPlan {
     geometry: CrossGeometry,
     seam: u32,
-    left_distance: Vec<f64>,
-    right_distance: Vec<f64>,
+    left_support: Vec<f64>,
+    right_support: Vec<f64>,
+    left_match_distance: Vec<f64>,
+    right_match_distance: Vec<f64>,
     left_gain: Vec<Rgb>,
     right_gain: Vec<Rgb>,
     center_gain: Vec<Rgb>,
@@ -88,8 +90,10 @@ struct VerticalPlan {
 struct HorizontalPlan {
     geometry: CrossGeometry,
     seam: u32,
-    top_distance: Vec<f64>,
-    bottom_distance: Vec<f64>,
+    top_support: Vec<f64>,
+    bottom_support: Vec<f64>,
+    top_match_distance: Vec<f64>,
+    bottom_match_distance: Vec<f64>,
     top_gain: Vec<Rgb>,
     bottom_gain: Vec<Rgb>,
     center_gain: Vec<Rgb>,
@@ -129,10 +133,10 @@ pub fn strucfix_png(
     let vertical = build_vertical_plan(&base, &y_reference, y_geometry, x, y)?;
     let horizontal = build_horizontal_plan(&base, &x_reference, x_geometry, y, x)?;
 
-    let left_stitch = range_report(&vertical.left_distance);
-    let right_stitch = range_report(&vertical.right_distance);
-    let top_stitch = range_report(&horizontal.top_distance);
-    let bottom_stitch = range_report(&horizontal.bottom_distance);
+    let left_stitch = range_report(&vertical.left_support);
+    let right_stitch = range_report(&vertical.right_support);
+    let top_stitch = range_report(&horizontal.top_support);
+    let bottom_stitch = range_report(&horizontal.bottom_support);
 
     let changed_pixels = base.map_linear_rgb(TRANSFER, 0, |px, py, original| {
         let vertical_sample = vertical.sample(&y_reference, px, py);
@@ -147,8 +151,8 @@ pub fn strucfix_png(
     }
 
     Ok(StructuralReport {
-        version: 1,
-        strategy: "registered_cross_adaptive_stitch_raised_cosine".to_owned(),
+        version: 2,
+        strategy: "registered_cross_local_alpha_blob_raised_cosine".to_owned(),
         image: base.image_report(),
         x,
         y,
@@ -270,9 +274,9 @@ fn build_vertical_plan(
         geometry.origin_x + half == seam,
         "--ycross is not centered exactly on --x"
     );
-    let (minimum, maximum, step) = search_bounds(half)?;
+    let (match_minimum, match_maximum, match_step) = match_search_bounds(half)?;
     let height = geometry.height;
-    let raw_left: Vec<f64> = (0..height)
+    let raw_left_match: Vec<f64> = (0..height)
         .into_par_iter()
         .map(|y| {
             best_vertical_distance(
@@ -282,13 +286,13 @@ fn build_vertical_plan(
                 seam,
                 y,
                 Side::Negative,
-                minimum,
-                maximum,
-                step,
+                match_minimum,
+                match_maximum,
+                match_step,
             ) as f64
         })
         .collect();
-    let raw_right: Vec<f64> = (0..height)
+    let raw_right_match: Vec<f64> = (0..height)
         .into_par_iter()
         .map(|y| {
             best_vertical_distance(
@@ -298,21 +302,21 @@ fn build_vertical_plan(
                 seam,
                 y,
                 Side::Positive,
-                minimum,
-                maximum,
-                step,
+                match_minimum,
+                match_maximum,
+                match_step,
             ) as f64
         })
         .collect();
-    let left_distance = smooth_distances(&raw_left, minimum, maximum);
-    let right_distance = smooth_distances(&raw_right, minimum, maximum);
+    let left_match_distance = smooth_distances(&raw_left_match, match_minimum, match_maximum);
+    let right_match_distance = smooth_distances(&raw_right_match, match_minimum, match_maximum);
     let left_gain = vertical_gain_profile(
         base,
         reference,
         geometry,
         seam,
         Side::Negative,
-        &left_distance,
+        &left_match_distance,
         orthogonal_seam,
     );
     let right_gain = vertical_gain_profile(
@@ -321,7 +325,7 @@ fn build_vertical_plan(
         geometry,
         seam,
         Side::Positive,
-        &right_distance,
+        &right_match_distance,
         orthogonal_seam,
     );
     let center_gain = left_gain
@@ -329,11 +333,46 @@ fn build_vertical_plan(
         .zip(&right_gain)
         .map(|(left, right)| std::array::from_fn(|channel| (left[channel] + right[channel]) * 0.5))
         .collect();
+    let (support_minimum, support_maximum) = support_search_bounds(half)?;
+    let raw_left_support: Vec<f64> = (0..height)
+        .into_par_iter()
+        .map(|y| {
+            nearest_vertical_support(
+                base,
+                reference,
+                geometry,
+                seam,
+                y,
+                Side::Negative,
+                support_minimum,
+                support_maximum,
+            ) as f64
+        })
+        .collect();
+    let raw_right_support: Vec<f64> = (0..height)
+        .into_par_iter()
+        .map(|y| {
+            nearest_vertical_support(
+                base,
+                reference,
+                geometry,
+                seam,
+                y,
+                Side::Positive,
+                support_minimum,
+                support_maximum,
+            ) as f64
+        })
+        .collect();
+    let left_support = smooth_distances(&raw_left_support, support_minimum, support_maximum);
+    let right_support = smooth_distances(&raw_right_support, support_minimum, support_maximum);
     Ok(VerticalPlan {
         geometry,
         seam,
-        left_distance,
-        right_distance,
+        left_support,
+        right_support,
+        left_match_distance,
+        right_match_distance,
         left_gain,
         right_gain,
         center_gain,
@@ -352,9 +391,9 @@ fn build_horizontal_plan(
         geometry.origin_y + half == seam,
         "--xcross is not centered exactly on --y"
     );
-    let (minimum, maximum, step) = search_bounds(half)?;
+    let (match_minimum, match_maximum, match_step) = match_search_bounds(half)?;
     let width = geometry.width;
-    let raw_top: Vec<f64> = (0..width)
+    let raw_top_match: Vec<f64> = (0..width)
         .into_par_iter()
         .map(|x| {
             best_horizontal_distance(
@@ -364,13 +403,13 @@ fn build_horizontal_plan(
                 seam,
                 x,
                 Side::Negative,
-                minimum,
-                maximum,
-                step,
+                match_minimum,
+                match_maximum,
+                match_step,
             ) as f64
         })
         .collect();
-    let raw_bottom: Vec<f64> = (0..width)
+    let raw_bottom_match: Vec<f64> = (0..width)
         .into_par_iter()
         .map(|x| {
             best_horizontal_distance(
@@ -380,21 +419,21 @@ fn build_horizontal_plan(
                 seam,
                 x,
                 Side::Positive,
-                minimum,
-                maximum,
-                step,
+                match_minimum,
+                match_maximum,
+                match_step,
             ) as f64
         })
         .collect();
-    let top_distance = smooth_distances(&raw_top, minimum, maximum);
-    let bottom_distance = smooth_distances(&raw_bottom, minimum, maximum);
+    let top_match_distance = smooth_distances(&raw_top_match, match_minimum, match_maximum);
+    let bottom_match_distance = smooth_distances(&raw_bottom_match, match_minimum, match_maximum);
     let top_gain = horizontal_gain_profile(
         base,
         reference,
         geometry,
         seam,
         Side::Negative,
-        &top_distance,
+        &top_match_distance,
         orthogonal_seam,
     );
     let bottom_gain = horizontal_gain_profile(
@@ -403,7 +442,7 @@ fn build_horizontal_plan(
         geometry,
         seam,
         Side::Positive,
-        &bottom_distance,
+        &bottom_match_distance,
         orthogonal_seam,
     );
     let center_gain = top_gain
@@ -411,18 +450,53 @@ fn build_horizontal_plan(
         .zip(&bottom_gain)
         .map(|(top, bottom)| std::array::from_fn(|channel| (top[channel] + bottom[channel]) * 0.5))
         .collect();
+    let (support_minimum, support_maximum) = support_search_bounds(half)?;
+    let raw_top_support: Vec<f64> = (0..width)
+        .into_par_iter()
+        .map(|x| {
+            nearest_horizontal_support(
+                base,
+                reference,
+                geometry,
+                seam,
+                x,
+                Side::Negative,
+                support_minimum,
+                support_maximum,
+            ) as f64
+        })
+        .collect();
+    let raw_bottom_support: Vec<f64> = (0..width)
+        .into_par_iter()
+        .map(|x| {
+            nearest_horizontal_support(
+                base,
+                reference,
+                geometry,
+                seam,
+                x,
+                Side::Positive,
+                support_minimum,
+                support_maximum,
+            ) as f64
+        })
+        .collect();
+    let top_support = smooth_distances(&raw_top_support, support_minimum, support_maximum);
+    let bottom_support = smooth_distances(&raw_bottom_support, support_minimum, support_maximum);
     Ok(HorizontalPlan {
         geometry,
         seam,
-        top_distance,
-        bottom_distance,
+        top_support,
+        bottom_support,
+        top_match_distance,
+        bottom_match_distance,
         top_gain,
         bottom_gain,
         center_gain,
     })
 }
 
-fn search_bounds(half_span: u32) -> Result<(u32, u32, u32)> {
+fn match_search_bounds(half_span: u32) -> Result<(u32, u32, u32)> {
     let margin = (half_span / 64).clamp(4, 64);
     let maximum = half_span
         .checked_sub(margin + 1)
@@ -431,6 +505,18 @@ fn search_bounds(half_span: u32) -> Result<(u32, u32, u32)> {
     ensure!(minimum < maximum, "cross-reference stitch search is empty");
     let step = if maximum - minimum >= 1024 { 2 } else { 1 };
     Ok((minimum, maximum, step))
+}
+
+fn support_search_bounds(half_span: u32) -> Result<(u32, u32)> {
+    let minimum = (half_span / 1024).clamp(3, 8);
+    let maximum = (half_span / 8)
+        .max(minimum + 8)
+        .min(half_span.saturating_sub(2));
+    ensure!(
+        minimum < maximum,
+        "cross-reference local support search is empty"
+    );
+    Ok((minimum, maximum))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -487,6 +573,112 @@ fn best_horizontal_distance(
             y - geometry.origin_y,
         )
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nearest_vertical_support(
+    base: &PngStage,
+    reference: &PngStage,
+    geometry: CrossGeometry,
+    seam: u32,
+    y: u32,
+    side: Side,
+    minimum: u32,
+    maximum: u32,
+) -> u32 {
+    nearest_agreement_distance(minimum, maximum, |distance| {
+        let x = match side {
+            Side::Negative => seam - 1 - distance,
+            Side::Positive => seam + distance,
+        };
+        structural_cost(
+            base,
+            reference,
+            x,
+            y,
+            x - geometry.origin_x,
+            y - geometry.origin_y,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn nearest_horizontal_support(
+    base: &PngStage,
+    reference: &PngStage,
+    geometry: CrossGeometry,
+    seam: u32,
+    x: u32,
+    side: Side,
+    minimum: u32,
+    maximum: u32,
+) -> u32 {
+    nearest_agreement_distance(minimum, maximum, |distance| {
+        let y = match side {
+            Side::Negative => seam - 1 - distance,
+            Side::Positive => seam + distance,
+        };
+        structural_cost(
+            base,
+            reference,
+            x,
+            y,
+            x - geometry.origin_x,
+            y - geometry.origin_y,
+        )
+    })
+}
+
+fn nearest_agreement_distance<F>(minimum: u32, maximum: u32, cost: F) -> u32
+where
+    F: Fn(u32) -> Option<f64>,
+{
+    let mut costs: Vec<f64> = (minimum..=maximum)
+        .map(|distance| cost(distance).unwrap_or(f64::INFINITY))
+        .collect();
+    let finite_max = costs
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(0.0_f64, f64::max);
+    if finite_max == 0.0 && costs.iter().all(|value| !value.is_finite()) {
+        return minimum;
+    }
+    let invalid_cost = finite_max.mul_add(2.0, 1.0);
+    for value in &mut costs {
+        if !value.is_finite() {
+            *value = invalid_cost;
+        }
+    }
+    let smoothed = box_smooth_scalar(&box_smooth_scalar(&costs, 2), 2);
+    let tail_start = smoothed.len() * 3 / 4;
+    let mut tail = smoothed[tail_start..].to_vec();
+    let baseline = median(&mut tail);
+    let mut deviations: Vec<f64> = smoothed[tail_start..]
+        .iter()
+        .map(|value| (value - baseline).abs())
+        .collect();
+    let dispersion = 1.4826 * median(&mut deviations);
+    let tolerance = (1.5 * dispersion).max(0.08 * baseline.abs()).max(1.0e-4);
+    let threshold = baseline + tolerance;
+    let stable_run = (smoothed.len() / 32).clamp(3, 9);
+
+    for index in 0..=smoothed.len().saturating_sub(stable_run) {
+        let run = &smoothed[index..index + stable_run];
+        let run_mean = run.iter().sum::<f64>() / run.len() as f64;
+        if smoothed[index] <= threshold && run_mean <= threshold {
+            return minimum + index as u32;
+        }
+    }
+
+    smoothed
+        .iter()
+        .enumerate()
+        .min_by(|(left_index, left), (right_index, right)| {
+            left.total_cmp(right)
+                .then_with(|| left_index.cmp(right_index))
+        })
+        .map_or(minimum, |(index, _)| minimum + index as u32)
 }
 
 fn best_distance<F>(minimum: u32, maximum: u32, step: u32, cost: F) -> u32
@@ -734,27 +926,29 @@ impl VerticalPlan {
             return None;
         }
         let index = y as usize;
-        let (distance, extent, edge_gain) = if x < self.seam {
+        let (distance, support, match_distance, edge_gain) = if x < self.seam {
             (
                 f64::from(self.seam - 1 - x),
-                self.left_distance[index],
+                self.left_support[index],
+                self.left_match_distance[index],
                 self.left_gain[index],
             )
         } else {
             (
                 f64::from(x - self.seam),
-                self.right_distance[index],
+                self.right_support[index],
+                self.right_match_distance[index],
                 self.right_gain[index],
             )
         };
-        let alpha = raised_cosine(distance, extent);
+        let alpha = raised_cosine(distance, support);
         if alpha <= 0.0 {
             return None;
         }
         let local_x = x - self.geometry.origin_x;
         let local_y = y - self.geometry.origin_y;
         let rgb = reference.linear_rgb_with_transfer(local_x, local_y, TRANSFER)?;
-        let outward = smooth_step((distance / extent).clamp(0.0, 1.0));
+        let outward = smooth_step((distance / match_distance).clamp(0.0, 1.0));
         let gain = interpolate_rgb(self.center_gain[index], edge_gain, outward);
         Some((alpha, apply_log_gain(rgb, gain)))
     }
@@ -769,27 +963,29 @@ impl HorizontalPlan {
             return None;
         }
         let index = x as usize;
-        let (distance, extent, edge_gain) = if y < self.seam {
+        let (distance, support, match_distance, edge_gain) = if y < self.seam {
             (
                 f64::from(self.seam - 1 - y),
-                self.top_distance[index],
+                self.top_support[index],
+                self.top_match_distance[index],
                 self.top_gain[index],
             )
         } else {
             (
                 f64::from(y - self.seam),
-                self.bottom_distance[index],
+                self.bottom_support[index],
+                self.bottom_match_distance[index],
                 self.bottom_gain[index],
             )
         };
-        let alpha = raised_cosine(distance, extent);
+        let alpha = raised_cosine(distance, support);
         if alpha <= 0.0 {
             return None;
         }
         let local_x = x - self.geometry.origin_x;
         let local_y = y - self.geometry.origin_y;
         let rgb = reference.linear_rgb_with_transfer(local_x, local_y, TRANSFER)?;
-        let outward = smooth_step((distance / extent).clamp(0.0, 1.0));
+        let outward = smooth_step((distance / match_distance).clamp(0.0, 1.0));
         let gain = interpolate_rgb(self.center_gain[index], edge_gain, outward);
         Some((alpha, apply_log_gain(rgb, gain)))
     }
@@ -922,5 +1118,27 @@ mod tests {
             Some(f64::from(distance.abs_diff(1337)))
         });
         assert_eq!(selected, 1337);
+    }
+
+    #[test]
+    fn local_support_uses_the_nearest_stable_agreement_not_the_later_minimum() {
+        let selected = nearest_agreement_distance(3, 100, |distance| {
+            Some(if (18..=30).contains(&distance) {
+                0.05
+            } else if (55..=65).contains(&distance) {
+                0.01
+            } else if distance >= 75 {
+                0.05
+            } else {
+                1.0
+            })
+        });
+        assert!((18..=22).contains(&selected));
+    }
+
+    #[test]
+    fn standard_cross_support_is_local_but_light_matching_remains_far() {
+        assert_eq!(support_search_bounds(2048).unwrap(), (3, 256));
+        assert_eq!(match_search_bounds(2048).unwrap(), (512, 2015, 2));
     }
 }

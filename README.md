@@ -185,10 +185,10 @@ The project provides three complementary repairs:
   midpoint-anchored waves without blurring, resizing, denoising, or
   regenerating the source.
 - **Registered Cross Structural Fix** consumes the landscape and portrait
-  overlap renders from shifted PiD crops. It finds four smooth low-difference
-  stitch curves, carries each canonical midline outward with a raised-cosine
-  mask, and combines both references with orthogonal-seam-aware weights at
-  their central overlap.
+  overlap renders from shifted PiD crops. Distant correspondence samples retain
+  the proven seam-center light match, while four independent nearest-agreement
+  curves limit the visible raised-cosine layer to a narrow cross. Both
+  references retain orthogonal-seam-aware weighting at their central overlap.
   This is the automatic path for fingers, edges, and other geometry that was
   generated differently on opposite sides of the original four-tile join.
 - **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
@@ -313,33 +313,42 @@ portrait / --ycross:
   (512,0,1024,1024) + (512,1024,1024,1024) -> 4096x8192
 ```
 
-For every output row, the portrait path searches left and right for the local
-minimum base/reference difference. For every column, the landscape path does
-the same above and below. The metric is dominated by differences between
-local log-linear RGB gradients, so structure matters more than a small
-exposure offset. Robust median and low-pass passes turn the raw minima into
-four smooth stitch curves. A local log-RGB gain matches each reference back to
-the corrected base at its selected curve.
+The structural and photometric decisions are deliberately separate. For every
+output row or column, the original distant search still finds a reliable
+base/reference correspondence and derives the same robust log-RGB light match
+that made the center seam successful. Those samples are invisible anchors;
+they no longer determine how far reference pixels are painted into the image.
 
-If `d` is normal distance from the original join and `D(t)` is the adaptive
-stitch distance at along-seam position `t`, the reference weight is
+A second walk starts immediately beside the join and selects the **nearest
+stable agreement** between corresponding base/reference structure. Robust
+tangential smoothing turns those results into four compact support curves. For
+a standard 4096-pixel cross short axis, the photometric anchor search remains
+512–2015 pixels from the join, while visible support starts at 3 pixels and is
+hard-contained within 256 pixels. It normally terminates much earlier when the
+two renders agree. No width or threshold is exposed to the user.
+
+If `d` is normal distance from the original join and `S(t)` is the local
+support distance at along-seam position `t`, the reference weight is
 
 $$
 \alpha(d,t)=
 \begin{cases}
-\tfrac12[1+\cos(\pi d/D(t))],&0\le d<D(t),\\
-0,&d\ge D(t).
+\tfrac12[1+\cos(\pi d/S(t))],&0\le d<S(t),\\
+0,&d\ge S(t).
 \end{cases}
 $$
 
-Thus the overlap render is authoritative at the original seam, the corrected
-base is authoritative at and beyond the chosen stitch, and both the value and
-first derivative meet smoothly. At the central overlap, vertical and
-horizontal evidence use the smooth union
+Thus the overlap render remains exactly as authoritative at the original seam
+as in the previous implementation, but the corrected base becomes completely
+authoritative at and beyond the nearest-agreement support. Both value and first
+derivative meet smoothly. At the central overlap, vertical and horizontal
+evidence use the smooth union
 `1-(1-alpha_x)(1-alpha_y)`. Inside that union, each reference is down-weighted
 as its own orthogonal PiD join is approached; the exact center is shared
-symmetrically. No rectangular paste boundary is created. Outside the adaptive
-cross, the corrected base samples remain byte-for-byte unchanged.
+symmetrically. No rectangular paste boundary is created. Outside this compact
+alpha cross, the corrected base samples remain byte-for-byte unchanged. The
+four `*_stitch` ranges in the JSON report now describe visible alpha support,
+not the distant light-balance anchors.
 
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
