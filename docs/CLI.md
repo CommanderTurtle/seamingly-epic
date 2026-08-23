@@ -174,3 +174,12 @@ unambiguous during correction.
 Alpha bytes are never changed. Recognized standard PNG color, ICC, EXIF, text,
 and ComfyUI metadata chunks are carried into the output. Unknown private chunks
 outside the codec's metadata model are not claimed to be preserved.
+
+The native path no longer imposes a fixed Balanced compressor on every source.
+It reads the zlib `FLEVEL` class from the first IDAT stream and maps the four
+portable classes to representative DEFLATE levels 1, 3, 6, or 9 while retaining
+adaptive PNG row filtering. PNG does not record the exact encoder build,
+filter decisions, or literal compression level, so identical file size is not
+a valid preservation target once RGB samples change. If no correction is
+accepted, the source file is copied byte-for-byte and all chunks and compressed
+bytes therefore remain identical.

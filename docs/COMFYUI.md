@@ -45,7 +45,7 @@ output file. Source decoding and the completed `f64` field use temporary memory
 maps; the spectral solve uses two full-resolution `f64` work planes for one
 color channel at a time. See the exact storage figures in `docs/CLI.md`.
 
-## Reference Repair
+## Complete SeamFix 2.1 tutorial workflow
 
 Rob Adams' [Fixing the Seams from a Tiled Upscaler in
 ComfyUI](https://www.youtube.com/watch?v=V-ASlpPI87Y) demonstrates a different
@@ -54,8 +54,55 @@ color-adjusted, then composited through a grown/blurred hand-painted mask. This
 can replace a double edge or hallucinated object but may replace generated
 detail too.
 
-**Seamingly Epic — Reference Repair** reproduces that relevant 45-node workflow
-chain in one native PyTorch node:
+Import [`../workflows/SeamFixVer2.1.original.json`](../workflows/SeamFixVer2.1.original.json).
+The payload preserves the original workflow exactly:
+
+- 45 nodes and 41 links;
+- the first McBoaty pass at `denoise=0.35`;
+- the painted **Softfix** lane with mask blur radius `20`, brightness `-3`,
+  and saturation `-6`;
+- the second McBoaty pass at `denoise=0.5`;
+- the painted **HardFix** lane with mask blur radius `10`, temperature `2`,
+  brightness `-3`, and saturation `-5`.
+
+The original graph refers to four historical custom-node names. This project
+registers focused compatibility implementations under those exact serialized
+names:
+
+| Workflow type | Bundled implementation |
+| --- | --- |
+| `MarasitUpscalerRefinerNode_v2` | nine-overlap-tile McBoaty v2 upscale/refine/rebuild |
+| `Image Resize` | WAS-compatible resize and optional 8x supersampling |
+| `PreviewBridge` | current ComfyUI Mask Editor bridge |
+| `ColorCorrect` | all six original color controls without OpenCV |
+
+Core ComfyUI supplies the checkpoint, CLIP, image, mask-conversion, blur,
+composite, reroute, preview, and note nodes. KJNodes supplies
+`GrowMaskWithBlur`. VAE Utils is compatible with the surrounding PiD graph but
+the untouched tutorial JSON does not require one of its nodes.
+
+### Paint each mask
+
+For each node displayed as **SeamFix — Paint Mask Here**:
+
+1. Queue once so the node has an image preview.
+2. Right-click that preview and choose **Open in Mask Editor**.
+3. Paint the seam or semantic artifact exactly as in the video.
+4. Save to the node.
+5. Queue again. The node reads the clipspace PNG's inverted alpha as its MASK.
+
+This is an actual interactive mask round-trip. It is not an automatically
+generated seam strip standing in for the tutorial's painter.
+
+The bundled McBoaty node preserves the tutorial controls, but the JSON's
+checkpoint, input-image, and upscaler filenames are the author's local choices.
+Select files available in the current ComfyUI installation before queueing.
+
+## Compact Reference Repair
+
+**Seamingly Epic — Reference Repair** is a separate convenience entrypoint for
+an already-refined PiD result. It condenses only the reference-resize,
+mask-grow/feather, color-adjust, and masked-composite portion:
 
 ```text
 refined IMAGE ────────────────────────────────┐
@@ -92,5 +139,7 @@ SEAMINGLY_EPIC_BIN   absolute path to a different native binary
 SEAMINGLY_EPIC_TEMP  scratch root for source staging, f64 fields, and IMAGE transport
 ```
 
-The nodes do not launch a server, bind a port, contact the internet, or retain
-state after execution.
+The nodes do not launch a server, bind a port, or contact the internet. The
+paint bridge retains only the clipspace filename saved in the workflow node;
+ComfyUI owns the corresponding input image just as it does for its native Mask
+Editor.

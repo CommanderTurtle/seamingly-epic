@@ -26,6 +26,10 @@
 - [x] Implement a float32 raw transport for a zero-quantization ComfyUI IMAGE node.
 - [x] Implement a streaming file node for images too large to return as a Comfy tensor.
 - [x] Condense the cited manual reference-mask workflow into one ComfyUI node.
+- [x] Preserve the original 45-node SeamFix 2.1 JSON and both painted repair lanes.
+- [x] Bundle focused compatibility nodes for every non-KJ tutorial dependency.
+- [x] Preserve the source PNG's zlib compression class instead of forcing Balanced.
+- [x] Copy a no-op PNG result byte-for-byte without re-encoding.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
 - [x] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.

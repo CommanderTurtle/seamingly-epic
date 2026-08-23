@@ -17,9 +17,9 @@ coordinates are `x=4096` and `y=4096`.
 - Rob Adams, [Fixing the Seams from a Tiled Upscaler in ComfyUI](https://www.youtube.com/watch?v=V-ASlpPI87Y), 2024-05-25.
 - The video description supplies `SeamFixVer2.1.png`, a 45-node ComfyUI
   workflow with embedded workflow JSON.
-- Local research captures are intentionally excluded from Git under
-  `.research/`: the auto-caption transcript, embedded JSON, source workflow,
-  and selected screenshots.
+- The exact embedded JSON is tracked as
+  `workflows/SeamFixVer2.1.original.json`. Auto-caption captures, screenshots,
+  source clones, and the PNG carrier remain excluded under `.research/`.
 
 Notable points:
 
@@ -39,6 +39,26 @@ The workflow's relevant node chain is:
 4. Blur and enlarge the original image.
 5. Manually color-correct that reference.
 6. Composite the reference patch over the refined output.
+
+The complete graph was also checked node-by-node. It contains two McBoaty v2
+passes, two independently painted PreviewBridge masks, four WAS Image Resize
+nodes, two KJNodes GrowMaskWithBlur nodes, two Art Venture ColorCorrect nodes,
+and core ComfyUI plumbing. The focused compatibility source was based on these
+tutorial-era revisions:
+
+- ComfyUI MaraScott Nodes:
+  `90f3f800833400a5579ddc4ce00116c626974840`;
+- ComfyUI Impact Pack:
+  `8acae9fe862fef3aab59aaf828aaa8ac9859e05d`;
+- ComfyUI Art Venture:
+  `80d18c23aaf2d66b2766ef815992218fac6a3543`;
+- WAS Node Suite:
+  `15840cbdd68fe7f7c323495fbe03f1082177c379`;
+- ComfyUI-KJNodes:
+  `63e6b81aee641c777ea06a5a442af27c5476e123`.
+
+Attribution and license text for adapted compatibility behavior are retained
+in `THIRD_PARTY_NOTICES.md`.
 
 That approach is useful for semantic hallucinations, but it is manual and can
 replace synthesized detail. Seamingly Epic instead automates the common

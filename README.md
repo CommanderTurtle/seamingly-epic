@@ -187,10 +187,13 @@ The project provides two complementary repairs:
   linear light, solves globally consistent tile gains, and applies a smooth
   residual field without blurring, resizing, denoising, or regenerating the
   source.
-- **Reference Repair for ComfyUI** condenses Rob Adams' manual
-  [SeamFix 2.1 workflow](https://www.youtube.com/watch?v=V-ASlpPI87Y) into one
-  node: resize the original reference, grow/feather a supplied or generated
-  mask, color-adjust, and composite it over a semantic artifact.
+- **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
+  [45-node tutorial graph](https://www.youtube.com/watch?v=V-ASlpPI87Y),
+  including both painted Softfix and HardFix lanes. Focused compatibility
+  implementations of McBoaty v2, Image Resize, PreviewBridge, and ColorCorrect
+  live in this custom-node project; KJNodes supplies only `GrowMaskWithBlur`.
+- **Reference Repair for ComfyUI** remains as a compact PiD-ready helper when
+  the already-refined image and original reference are the desired entrypoints.
 
 The native path supports regular `1x2`, `2x1`, `2x2`, `5x5`, and larger grids,
 plus arbitrary output-pixel X/Y seam coordinates. It is entirely local and has
@@ -224,6 +227,14 @@ Restart ComfyUI. The nodes appear under `image / seamingly epic`:
   become another full Comfy tensor.
 - **Seamingly Epic — Reference Repair**: the tutorial's painted-reference
   composite path in one node.
+
+The complete tutorial workflow is tracked at
+[`workflows/SeamFixVer2.1.original.json`](workflows/SeamFixVer2.1.original.json).
+It is the original 45-node/41-link JSON payload, not a visually similar
+reconstruction. Import it directly. The legacy serialized node type names are
+registered by this pack, so MaraScott, WAS Node Suite, Impact Pack, and Art
+Venture are not required. Install only current ComfyUI plus KJNodes; VAE Utils
+may remain installed for the surrounding PiD workflow.
 
 ComfyUI already supplies Python, PyTorch, and NumPy; the project adds no Python
 packages. Rust/Cargo is only needed to run the setup script. See
@@ -299,6 +310,10 @@ requirements, and supported PNG formats.
 
 - PNG output remains losslessly encoded at the source per-channel depth:
   RGB24/RGBA32 use 8-bit channels; RGB48/RGBA64 use 16-bit channels.
+- The encoder reads the source IDAT zlib `FLEVEL` class and reuses its
+  representative DEFLATE strength instead of forcing every output through a
+  Balanced preset. If analysis accepts no correction, the input PNG is copied
+  byte-for-byte rather than decoded and re-encoded.
 - All analysis and correction-field arithmetic is `f64`; a 16-bit source is
   never routed through an 8-bit or float32 image, palette, or intermediate
   codec. The Comfy path returns float32 only because its source `IMAGE` is
@@ -311,6 +326,10 @@ requirements, and supported PNG formats.
 
 Correction necessarily changes RGB values. Here, "lossless" means no lossy
 codec or detail-destroying spatial operation—not byte-identical color samples.
+PNG does not store an encoder's exact implementation or literal 0-9 setting,
+so a corrected file cannot be promised the same byte count as its source. A
+smaller corrected PNG is still lossless; the meaningful invariants are sample
+depth, color type, alpha, recognized metadata, dimensions, and pixel values.
 An exposure/white-balance discontinuity is suitable for the native engine; an
 object split, double edge, or incompatible generated texture belongs in the
 Reference Repair node or another generative edit.
@@ -328,7 +347,7 @@ cargo fmt --all --check
 cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo audit
-python -m compileall -q __init__.py nodes.py runtime.py
+python -m compileall -q __init__.py nodes.py tutorial_nodes.py runtime.py
 cargo build --release --locked
 ```
 

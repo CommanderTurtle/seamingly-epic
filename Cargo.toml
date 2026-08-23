@@ -1,6 +1,6 @@
 [package]
 name = "seamingly-epic"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Full-resolution f64 photometric seam correction for independently refined image tiles"
