@@ -171,16 +171,42 @@ def report_mask(
     batch: int,
     height: int,
     width: int,
-    blend_width: int,
 ):
     """Create a Comfy MASK showing where accepted corrections can act."""
 
     import torch
 
     masks = torch.zeros((batch, height, width), dtype=torch.float32)
-    if blend_width <= 0:
-        return masks
+
+    def normal_wave(coordinate: int, edge_a: int, edge_b: int):
+        boundary_a = coordinate - 1
+        anchor_a = edge_a + (coordinate - edge_a) // 2
+        boundary_b = coordinate
+        anchor_b = coordinate + (edge_b - coordinate) // 2
+        low = max(0, anchor_a)
+        high = min(edge_b, anchor_b + 1)
+        axis = torch.arange(low, high, dtype=torch.float64)
+        fade = torch.zeros_like(axis)
+
+        left = (axis > anchor_a) & (axis <= boundary_a)
+        if boundary_a == anchor_a:
+            fade[axis == boundary_a] = 1.0
+        elif left.any():
+            unit = (float(boundary_a) - axis[left]) / float(boundary_a - anchor_a)
+            fade[left] = 0.5 * (1.0 + torch.cos(math.pi * unit))
+
+        right = (axis >= boundary_b) & (axis < anchor_b)
+        if boundary_b == anchor_b:
+            fade[axis == boundary_b] = 1.0
+        elif right.any():
+            unit = (axis[right] - float(boundary_b)) / float(anchor_b - boundary_b)
+            fade[right] = 0.5 * (1.0 + torch.cos(math.pi * unit))
+        return low, high, fade.to(torch.float32)
+
     for batch_index, report in enumerate(reports[:batch]):
+        layout = report.get("layout", {})
+        x_seams = [int(value) for value in layout.get("x_seams", [])]
+        y_seams = [int(value) for value in layout.get("y_seams", [])]
         for boundary in report.get("boundaries", []):
             if not boundary.get("accepted", False):
                 continue
@@ -189,35 +215,23 @@ def report_mask(
             end = int(boundary["segment_end"])
             confidence = float(boundary.get("confidence", 0.0))
             if boundary["orientation"] == "vertical":
-                low = max(0, coordinate - blend_width + 1)
-                high = min(width, coordinate + blend_width)
+                nominal = int(boundary["nominal_coordinate"])
+                seam_index = x_seams.index(nominal)
+                edge_a = x_seams[seam_index - 1] if seam_index > 0 else 0
+                edge_b = x_seams[seam_index + 1] if seam_index + 1 < len(x_seams) else width
+                low, high, fade = normal_wave(coordinate, edge_a, edge_b)
                 if high <= low or end <= start:
                     continue
-                axis = torch.arange(low, high, dtype=torch.float32)
-                fade = 0.5 * (
-                    1.0
-                    + torch.cos(
-                        math.pi
-                        * (axis - float(coordinate)).abs()
-                        / float(blend_width)
-                    )
-                )
                 region = masks[batch_index, max(0, start) : min(height, end), low:high]
                 region.copy_(torch.maximum(region, fade.unsqueeze(0) * confidence))
             else:
-                low = max(0, coordinate - blend_width + 1)
-                high = min(height, coordinate + blend_width)
+                nominal = int(boundary["nominal_coordinate"])
+                seam_index = y_seams.index(nominal)
+                edge_a = y_seams[seam_index - 1] if seam_index > 0 else 0
+                edge_b = y_seams[seam_index + 1] if seam_index + 1 < len(y_seams) else height
+                low, high, fade = normal_wave(coordinate, edge_a, edge_b)
                 if high <= low or end <= start:
                     continue
-                axis = torch.arange(low, high, dtype=torch.float32)
-                fade = 0.5 * (
-                    1.0
-                    + torch.cos(
-                        math.pi
-                        * (axis - float(coordinate)).abs()
-                        / float(blend_width)
-                    )
-                )
                 region = masks[batch_index, low:high, max(0, start) : min(width, end)]
                 region.copy_(torch.maximum(region, fade.unsqueeze(1) * confidence))
     return masks

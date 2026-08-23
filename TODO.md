@@ -15,14 +15,14 @@
 - [x] Propagate every connected constraint through all adjacency depths with a sparse graph solve.
 - [x] Prevent disconnected constraint graphs from creating new tile boundaries.
 - [x] Add confidence gating, correction limits, and a report-only mode.
-- [x] Add smooth exact-boundary residual closure without filtering image detail.
+- [x] Add smooth midpoint-anchored boundary waves without filtering image detail.
 - [x] Scanwalk every boundary position and verify a non-uniform per-pixel field.
-- [x] Reconstruct every seam impulse through the full pixel-grid inverse Laplacian.
-- [x] Store the global three-channel correction cloud in lossless `f64` planes.
-- [x] Close the exact seam samples after projecting non-integrable X/Y constraints.
-- [x] Preserve highlight headroom with one common RGB gauge rather than channel clipping.
+- [x] Remove the experimental full-image inverse-Laplacian cloud and its global exposure shift.
+- [x] Retain compact target and two-sided endpoint profiles in `f64`.
+- [x] Close cross-axis seam residuals with rollback-safe adaptive projections.
+- [x] Preserve exact white and source-native tile midpoint anchors.
 - [x] Verify all 17 adjacencies in a 12-tile 3x4 grid.
-- [x] Parallelize analysis, DCT passes, transposes, field writes, and application.
+- [x] Parallelize boundary analysis and full-resolution application.
 - [x] Implement a float32 raw transport for a zero-quantization ComfyUI IMAGE node.
 - [x] Implement a streaming file node for images too large to return as a Comfy tensor.
 - [x] Condense the cited manual reference-mask workflow into one ComfyUI node.

@@ -31,17 +31,18 @@ column regions: `4*8 + 7*5 = 67` distinct shared-edge measurements.
 Each vertical line is scanwalked at every Y position within every row region,
 and each horizontal line at every X position within every column region. All
 accepted neighboring deltas are solved together. The resulting position-varying
-profiles drive one global, full-resolution `f64` inverse-Laplacian field; every
-output pixel receives its own correction value. Direct coordinates are exact
-and do not search nearby pixels. Use the advanced `correct` subcommand when
-coordinate refinement or tuning is intentionally wanted.
+profiles drive two `f64` raised-cosine waves per boundary side. Each wave is
+full strength at the literal join, reaches exact zero at the corresponding tile
+midpoint, and leaves the outer half untouched. Direct coordinates are exact,
+are accepted as authoritative when a usable estimate exists, and do not search
+nearby pixels. Use the advanced `correct` subcommand when confidence gating,
+coordinate refinement, or tuning is intentionally wanted.
 
 Only genuinely shared edges are measured directly. Diagonal and distant tiles
 do not provide a trustworthy common scanline. Their relationship is carried
-first through every path in the sparse tile graph and then through the dense
-inverse of the complete pixel Laplacian. Thus a corner tile's field depends on
-the opposite corner without pretending those corners share raw pixels or scene
-semantics.
+through every path in the sparse tile Laplacian, which reconciles the endpoint
+gauges used at real edges. Detailed waves remain local to their measured seams;
+a distant tile is never treated as a source-color target.
 
 ## Commands
 
@@ -101,12 +102,12 @@ Coordinates refer to the assembled output, not the original tile size.
 | `--scan-radius` | 8 | Width of each near/far analysis strip. |
 | `--refine-radius` | 0 | Keep the supplied concatenate line exact; increase only when an earlier crop/resize may have shifted it. |
 | `--sample-stride` | 1 | Boundary sampling interval. The default inspects every row/column along every segment. |
-| `--blend-width` | 192 | Raised-cosine support used only to close the non-integrable remainder after global reconstruction. |
+| `--blend-width` | 192 | Legacy descriptor compatibility value. Normal support is inferred automatically from each seam to its neighboring tile midpoint. |
 | `--profile-smooth-radius` | 96 | Low-pass radius along the measured one-dimensional correction profile. It never filters source pixels. |
-| `--strength` | 1.0 | Global tile-gain multiplier. |
-| `--local-strength` | 1.0 | Bounded position-varying residual multiplier. |
+| `--strength` | 1.0 | Sparse graph endpoint-gauge multiplier. It is never applied as a whole-tile exposure. |
+| `--local-strength` | 1.0 | Position-varying seam-profile multiplier. |
 | `--max-gain-stops` | 0.75 | Hard per-channel gain limit. |
-| `--min-confidence` | 0.18 | Reject boundary segments below this score. |
+| `--min-confidence` | 0.0 | Treat supplied seams as authoritative whenever they yield a usable estimate; raise this only for uncertain layouts. |
 | `--transfer` | `srgb` | Interpret samples as `srgb` or already `linear`. |
 | `--threads` | 0 | Worker count. Zero uses Rayon's platform default. |
 
@@ -126,42 +127,42 @@ Every boundary is reported per tile segment. Important fields are:
 - `dispersion`: disagreement among along-boundary samples.
 - `confidence`: combined coverage, texture reliability, and coherence score.
 - `accepted`: whether the segment participates in correction.
-- `tile_gains`: globally solved per-tile values when the accepted adjacency
-  graph connects every tile.
-- `field.strategy`: the full-resolution Neumann/DCT reconstruction path.
+- `tile_gains`: globally solved graph gauges used to construct seam endpoints;
+  they are zeroed at tile-interior anchors rather than broadcast over tiles.
+- `field.strategy`: the midpoint-anchored graph-and-wave reconstruction path.
 - `field.seam_impulses`: number of stabilized per-position seam constraints.
 - `field.conceptual_tile_relationships`: dense ordered tile relationships
-  represented by the inverse Laplacian (`tile_count * tile_count`).
-- `field.stored_field_bytes`: exact size of the three temporary `f64` planes.
-- `field.headroom_shift_stops`: common RGB gauge used to prevent clipping; zero
-  when no shift was necessary.
+  reconciled through the sparse tile Laplacian (`tile_count * tile_count`).
+- `field.stored_field_bytes`: target plus two endpoint RGB profile storage.
+- `field.headroom_shift_stops`: retained for schema compatibility and always
+  zero; the engine never dims the full image.
+- `field.neutral_interior_anchors`: number of tile midpoint anchors at which
+  normal seam influence is exactly zero.
+- `field.refinement_passes`: accepted adaptive intersection-projection passes.
+- `field.initial_max_residual_stops` / `final_max_residual_stops`: literal
+  boundary mismatch before and after those passes.
 
-If accepted constraints do not connect the whole tile graph, constant tile
-gains are disabled. Accepted per-position constraints still participate in the
-pixel reconstruction and exact boundary closure; the warning makes this
-fallback explicit.
+If accepted constraints do not connect the whole tile graph, graph endpoint
+gauges are disabled. Accepted per-position constraints still construct local,
+midpoint-anchored waves; the warning makes this fallback explicit.
 
 ## Memory and temporary storage
 
 PNG rows are decoded into a temporary memory-mapped raw store, corrected in
-parallel, and encoded sequentially. The fidelity path additionally stores three
-`f64` correction planes (24 bytes per pixel) and solves one channel at a time
-with an `f64` DCT plane plus an equally sized transpose:
-
-- 8192x8192: 1.5 GiB mapped field + 1 GiB spectral workspace.
-- 16384x16384: 6 GiB mapped field + 4 GiB spectral workspace.
-- Source staging adds about 192 MiB for 8192x8192 RGB8, 512 MiB for
+parallel, and encoded sequentially. Correction storage scales with seam length,
+not total image area: each accepted seam position holds a target plus two
+endpoint RGB values (`9 * sizeof(f64)`, or 72 bytes). Source staging adds about
+192 MiB for 8192x8192 RGB8, 512 MiB for
   8192x8192 RGBA16, or 2 GiB for 16384x16384 RGBA16.
 
-Rows, columns, transposes, field writes, headroom analysis, and correction rows
-are parallel. `--threads 0` uses the platform Rayon pool, and RustFFT selects
-the available native SIMD kernel. PNG decoding and encoding remain sequential.
+Boundary segments and correction rows are parallel. `--threads 0` uses the
+platform Rayon pool. PNG decoding and encoding remain sequential.
 
 The Comfy IMAGE transport needs both input and output float32 scratch files.
 Set `SEAMINGLY_EPIC_TEMP` to a large local SSD directory when the system temp
-volume is unsuitable. Native PNG staging and the three-plane `f64` field honor
-the same setting. Scratch files are anonymous and are deleted when their owning
-process handles close. The Streaming PNG node is preferable for extreme sizes.
+volume is unsuitable. Native PNG staging honors the same setting. Scratch files
+are anonymous and are deleted when their owning process handles close. The
+Streaming PNG node is preferable for extreme sizes.
 
 ## PNG support
 

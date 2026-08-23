@@ -7,13 +7,17 @@ independently refined image tiles. It targets the exact case where four
 
 ## The whole method
 
-Tiles are nodes and shared boundaries are sparse connections. That small graph
-establishes a globally consistent exposure/white-balance gauge. Pixels then
-become the nodes of a second graph: every measured seam sample is injected as
-a desired edge gradient, and one full-resolution `f64` inverse-Laplacian solve
-turns all of those measurements into a single image-wide correction cloud. It
-is much like sparse attention for an image grid, except the result is an exact,
-deterministic graph optimization rather than a learned model.
+Tiles are nodes and shared boundaries are sparse connections. The tile graph
+reconciles what every neighbor observed, but its solution is used only to set
+the two endpoint profiles at each real seam. Those profiles become smooth,
+seam-normal waves which are full strength at the join and **exactly zero at the
+center of each adjacent tile**. No correction is broadcast across a quadrant,
+and there is no image-wide exposure gauge or Poisson cloud.
+
+It is much like sparse attention for an image grid: the Laplacian solve carries
+valid relationships through every adjacency depth, while detailed evidence
+remains attached to the boundary that actually measured it. The result is a
+deterministic graph-and-wave optimization rather than a learned model.
 
 The ordinary zero-configuration invocation is therefore only:
 
@@ -87,106 +91,81 @@ another through every real path and cycle in the connected tile graph. No
 fictional diagonal or distant pixel comparison is introduced. Storage and
 each graph iteration remain $O(|V|+|E|)$.
 
-The tile solve handles the globally consistent constant part. It leaves a
-position-varying residual profile $\mathbf r_e(t)$ at each accepted seam. Now
-let $G_\Omega=(\Omega,E_\Omega)$ be the four-neighbor graph of **every output
-pixel**, and let $D$ be its oriented incidence matrix. A desired correction
-gradient $\mathbf v_{pq}$ is zero on ordinary pixel edges and equals the
-negative measured residual on the edge that crosses a seam. The dense field is
-the zero-mean gradient-domain solution
+The graph values are not whole-tile gains. For an accepted edge $e=(a,b)$,
+position $t$ along its seam, measured log-linear RGB jump $\mathbf d_e(t)$,
+and solved tile gauges $\mathbf g_a,\mathbf g_b$, define
 
 $$
-\mathbf h^\star=
-\underset{\sum_{p\in\Omega}\mathbf h(p)=\mathbf 0}
-{\operatorname{arg\,min}}
-\sum_{(p,q)\in E_\Omega}
-\left\|\left(\mathbf h(q)-\mathbf h(p)\right)-
-\mathbf v_{pq}\right\|_2^2,
+\mathbf r_e(t)=\mathbf d_e(t)+(\mathbf g_b-\mathbf g_a).
 $$
 
-or equivalently
+The correction values at the last sample of side $a$ and first sample of side
+$b$ are
 
 $$
-L_\Omega\mathbf h=D^{\mathsf T}\mathbf v,
+\mathbf q_{e,a}(t)=\mathbf g_a+\tfrac12\mathbf r_e(t),
 \qquad
-L_\Omega=D^{\mathsf T}D,
-\qquad
-\mathbf h=L_\Omega^{+}D^{\mathsf T}\mathbf v.
+\mathbf q_{e,b}(t)=\mathbf g_b-\tfrac12\mathbf r_e(t).
 $$
 
-This is the literal ghost-map construction. By linearity, if $a$ enumerates
-the accepted per-position seam impulses,
+Therefore their difference is exactly the negative measured seam step:
 
 $$
-\mathbf h=
-\sum_a L_\Omega^{+}D^{\mathsf T}\mathbf e_a\,\mathbf v_a.
+\mathbf q_{e,b}(t)-\mathbf q_{e,a}(t)=-\mathbf d_e(t).
 $$
 
-Each summand is the conceptual full-image ghost field caused by one seam
-observation. The implementation does not allocate thousands of duplicate
-images; it superposes them exactly in spectral space and stores their single
-sum. For an 8x12 layout, the sparse measurements therefore induce all
-$96^2=9216$ ordered tile relationships while the actual solve remains over the
-real pixel graph. Tile 1 and tile 96 influence one another through every
-intervening path without falsely asserting that two unrelated scene pixels
-must have the same color.
-
-With zero-flux outer boundaries, the rectangular pixel Laplacian is exactly
-diagonalized by a two-dimensional DCT-II. Its eigenvalues are
+Each endpoint is then carried inward with a raised-cosine (equivalently,
+cosine-squared) wave. For normal distance $s$ from the seam and automatically
+derived distance $h$ to that tile's midpoint,
 
 $$
-\lambda_{k\ell}=
-4\sin^2\!\left(\frac{\pi k}{2W}\right)+
-4\sin^2\!\left(\frac{\pi \ell}{2H}\right).
-$$
-
-The DC coefficient is set to zero to fix the otherwise arbitrary common
-exposure. DCT-III reconstructs one independent `f64` value per pixel and RGB
-channel. A small raised-cosine closure field then supplies only the
-non-integrable remainder at the exact two samples straddling each seam. For
-normal distance $n$ and width $w$, its support is
-
-$$
-\phi(n)=
+\phi(s;h)=
 \begin{cases}
-\tfrac12[1+\cos(\pi|n|/w)],&|n|<w,\\
-0,&|n|\ge w.
+\tfrac12[1+\cos(\pi s/h)],&0\le s<h,\\
+0,&s\ge h.
 \end{cases}
 $$
 
-For tile $\tau(p)$, global field $\mathbf h$, closure field $\boldsymbol\ell$,
-and a common highlight-preserving gauge $a$, the final correction is
+Thus $\phi(0;h)=1$, $\phi(h;h)=0$, and the derivative is zero at both ends.
+The seam closes at full strength without a hard transition, while every tile's
+native midpoint and outer half remain untouched by that boundary's normal
+wave. Vertical and horizontal waves sum where their supports meet. At grid
+intersections, alternating projection
+passes remeasure the literal $n=-1$ and $n=+1$ samples and adjust only the two
+endpoint profiles. A speculative pass is retained only if it reduces the
+maximum boundary residual; otherwise it is rolled back and retried with a
+smaller relaxation factor.
+
+For the set $\mathcal E(p)$ of boundary sides whose midpoint-bounded support
+contains pixel $p$, the final correction is
 
 $$
-\mathbf c(p)=\mathbf g_{\tau(p)}+\mathbf h(p)+
-\boldsymbol\ell(p)+a\mathbf 1,
+\mathbf c(p)=\sum_{(e,k)\in\mathcal E(p)}
+\phi_e(p)\,\mathbf q_{e,k}(t_e(p)),
 \qquad
 \mathbf I_{\mathrm{out}}(p)=
 \mathbf I_{\mathrm{in}}(p)\odot\exp(\mathbf c(p)).
 $$
 
-That correction field is the two-dimensional **smokemap**. Only its values are
-reconstructed. Source samples are never convolved with neighbors, resampled,
-blurred, sharpened, denoised, regenerated, or passed through a lower-precision
-image. If the predicted correction would exceed the encoding ceiling, the
-single common gauge $a\le0$ shifts all channels equally; this preserves the
-solved color relationships and avoids destructive per-channel highlight
-clipping.
+The field is represented by compact `f64` seam profiles and evaluated directly
+for each output pixel. Source samples are never convolved with neighbors,
+resampled, blurred, sharpened, denoised, regenerated, or passed through a
+lower-precision image. There is deliberately no common negative headroom
+shift: native tile interiors keep their exact source colors, and channels that
+were exactly white remain exactly white.
 
-Boundary analysis, DCT rows and columns, transposes, correction-field storage,
-headroom inspection, and output rows run in parallel with Rayon. `threads=0`
-uses the platform pool (normally every available logical CPU). RustDCT uses
-RustFFT's native SIMD-capable kernels, while decoded source pixels and the final
-three-plane field live in temporary memory maps. Only PNG decode/encode remains
-inherently sequential. No GPU runtime, model, tensor conversion, or reduced
-precision is introduced.
+Boundary analysis and output rows run in parallel with Rayon. `threads=0` uses
+the platform pool (normally every available logical CPU). Decoded source pixels
+live in a temporary memory map; compact endpoint profiles remain in memory.
+Only PNG decode/encode is inherently sequential. No GPU runtime, model, tensor
+conversion, or reduced precision is introduced.
 
 The project provides two complementary repairs:
 
 - **Native photometric correction** measures persistent boundary steps in
-  linear light, solves globally consistent tile gains, and applies a smooth
-  residual field without blurring, resizing, denoising, or regenerating the
-  source.
+  linear light, solves globally consistent seam-endpoint gauges, and applies
+  midpoint-anchored waves without blurring, resizing, denoising, or
+  regenerating the source.
 - **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
   [45-node tutorial graph](https://www.youtube.com/watch?v=V-ASlpPI87Y),
   including both painted Softfix and HardFix lanes. Focused compatibility
@@ -274,11 +253,11 @@ seamingly-epic --x 222,3333,7755,8842 \
 Coordinates in direct mode are exact (`refine_radius=0`). The `analyze` and
 `correct` subcommands retain advanced controls and equal-grid shorthand.
 Every shared edge is scanwalked at every position by default. Its varying
-residual becomes a smooth correction field evaluated independently for every
-output pixel, while the globally solved per-tile gains reconcile all grid
-neighbors and intersections together. The matrix-free graph solve propagates
-those relationships through every adjacency depth until the complete connected
-grid agrees; no multiscale or tile-count setting is exposed to the user.
+profile becomes two midpoint-anchored waves evaluated independently for every
+output pixel. The matrix-free graph solve reconciles every grid neighbor and
+propagates those relationships through every adjacency depth, but its values
+exist only as seam endpoints—not constant edits to entire tiles. No waveform,
+adjacency-depth, or tile-count setting is exposed to the user.
 
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
@@ -323,6 +302,8 @@ requirements, and supported PNG formats.
 - Standard color, text, EXIF, ICC, and ComfyUI workflow/prompt metadata exposed
   by the PNG codec are retained.
 - Source geometry and spatial detail are never filtered, mixed, or resampled.
+- Every inferred normal wave is exactly zero at its tile midpoint, there is no
+  image-wide exposure shift, and exact source-white channels remain white.
 
 Correction necessarily changes RGB values. Here, "lossless" means no lossy
 codec or detail-destroying spatial operation—not byte-identical color samples.

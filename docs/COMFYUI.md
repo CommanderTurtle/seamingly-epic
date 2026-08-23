@@ -14,20 +14,21 @@ have been concatenated. For the standard 8192x8192 result:
    unchanged.
 
 The default `sample_stride=1` scanwalks every Y position on vertical segments
-and every X position on horizontal segments. A full-resolution `f64` Neumann
-Poisson solve superposes every accepted sample into one global correction
-field, and the native engine evaluates that field for every output pixel.
+and every X position on horizontal segments. The sparse tile Laplacian
+reconciles endpoint gauges, then two `f64` raised-cosine waves carry each
+position-varying profile from full strength at the seam to exact zero at the
+adjacent tile midpoints.
 
 The IMAGE path writes the tensor as little-endian float32, invokes the Rust
 engine without a shell, and reads float32 back. It never quantizes through an
 8-bit interchange image. ComfyUI still holds the input and output tensors, so
 this path is convenient rather than memory-minimal.
 
-The correction-area MASK is an **evidence/closure diagnostic**, not the support
-of the global field (which is image-wide). Brightness is accepted boundary
-confidence multiplied by the raised-cosine support of the exact residual
-closure term. Confidence gates unreliable segments; it does not attenuate an
-accepted residual and knowingly leave part of it behind.
+The correction-area MASK shows the actual normal support of accepted waves.
+Brightness is boundary confidence multiplied by the same midpoint-anchored
+raised cosine used by the native engine. Confidence gates unreliable advanced-
+mode segments; it does not attenuate an accepted residual and knowingly leave
+part of it behind.
 
 ## Streaming PNG
 
@@ -41,9 +42,9 @@ ComfyUI's input directory.
    absolute path plus the JSON report.
 
 The node never creates an `IMAGE` tensor. Its preview refers to the completed
-output file. Source decoding and the completed `f64` field use temporary memory
-maps; the spectral solve uses two full-resolution `f64` work planes for one
-color channel at a time. See the exact storage figures in `docs/CLI.md`.
+output file. Source decoding uses a temporary memory map, while the compact
+`f64` profiles scale with seam length rather than total image area. See the
+storage model in `docs/CLI.md`.
 
 ## Complete SeamFix 2.1 tutorial workflow
 
@@ -136,7 +137,7 @@ Two optional environment variables are available:
 
 ```text
 SEAMINGLY_EPIC_BIN   absolute path to a different native binary
-SEAMINGLY_EPIC_TEMP  scratch root for source staging, f64 fields, and IMAGE transport
+SEAMINGLY_EPIC_TEMP  scratch root for source staging and IMAGE transport
 ```
 
 The nodes do not launch a server, bind a port, or contact the internet. The

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import re
 import uuid
 from pathlib import Path
@@ -51,7 +50,15 @@ def _settings_schema() -> dict[str, tuple[Any, ...]]:
         "scan_radius": ("INT", {"default": 8, "min": 1, "max": 256}),
         "refine_radius": ("INT", {"default": 0, "min": 0, "max": 64}),
         "sample_stride": ("INT", {"default": 1, "min": 1, "max": 128}),
-        "blend_width": ("INT", {"default": 192, "min": 0, "max": 4096}),
+        "blend_width": (
+            "INT",
+            {
+                "default": 192,
+                "min": 0,
+                "max": 4096,
+                "tooltip": "Legacy workflow value; normal support is inferred to each tile midpoint.",
+            },
+        ),
         "profile_smooth_radius": (
             "INT",
             {"default": 96, "min": 0, "max": 4096},
@@ -67,7 +74,7 @@ def _settings_schema() -> dict[str, tuple[Any, ...]]:
         ),
         "min_confidence": (
             "FLOAT",
-            {"default": 0.18, "min": 0.0, "max": 1.0, "step": 0.01},
+            {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01},
         ),
         "transfer": (["srgb", "linear"], {"default": "srgb"}),
         "threads": ("INT", {"default": 0, "min": 0, "max": 256}),
@@ -91,7 +98,7 @@ class SeaminglyEpicImage:
     FUNCTION = "correct"
     CATEGORY = CATEGORY
     DESCRIPTION = (
-        "Automatic full-resolution f64 exposure/white-balance field reconstruction. "
+        "Automatic f64 midpoint-anchored exposure/white-balance seam waves. "
         "Uses float32 Comfy transport, does not blur or resample source detail, and "
         "returns the full confidence report."
     )
@@ -145,7 +152,6 @@ class SeaminglyEpicImage:
                 batch=batch,
                 height=height,
                 width=width,
-                blend_width=int(config["blend_width"]),
             )
             return corrected_tensor, area, json.dumps(reports, indent=2)
 
