@@ -45,8 +45,8 @@ def _settings_schema() -> dict[str, tuple[Any, ...]]:
             {"default": "", "multiline": False, "tooltip": "Optional output-pixel Y coordinates, e.g. 4096"},
         ),
         "scan_radius": ("INT", {"default": 8, "min": 1, "max": 256}),
-        "refine_radius": ("INT", {"default": 2, "min": 0, "max": 64}),
-        "sample_stride": ("INT", {"default": 4, "min": 1, "max": 128}),
+        "refine_radius": ("INT", {"default": 0, "min": 0, "max": 64}),
+        "sample_stride": ("INT", {"default": 1, "min": 1, "max": 128}),
         "blend_width": ("INT", {"default": 192, "min": 0, "max": 4096}),
         "profile_smooth_radius": (
             "INT",
@@ -55,7 +55,7 @@ def _settings_schema() -> dict[str, tuple[Any, ...]]:
         "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
         "local_strength": (
             "FLOAT",
-            {"default": 0.65, "min": 0.0, "max": 2.0, "step": 0.01},
+            {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01},
         ),
         "max_gain_stops": (
             "FLOAT",
@@ -173,8 +173,9 @@ class SeaminglyEpicFile:
     FUNCTION = "correct"
     CATEGORY = CATEGORY
     DESCRIPTION = (
-        "Bounded-memory 8/16-bit PNG path for 8K and 16K images. The image never "
-        "becomes a Comfy tensor; recognized PNG metadata and alpha are preserved."
+        "Bounded-memory RGB24/RGBA32/RGB48/RGBA64 PNG path for 8K and 16K "
+        "images. The image never becomes a Comfy tensor; recognized PNG "
+        "metadata and alpha are preserved."
     )
 
     def correct(self, image: str, output_prefix: str, **arguments):

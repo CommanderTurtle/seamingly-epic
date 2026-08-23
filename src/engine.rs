@@ -77,7 +77,6 @@ struct LocalField {
     segment_start: u32,
     segment_end: u32,
     profile: Vec<Rgb>,
-    confidence: f64,
 }
 
 impl LocalField {
@@ -128,7 +127,10 @@ impl CorrectionModel {
                     if distance < u64::from(blend_width) {
                         let fade = raised_cosine(distance as f64 / f64::from(blend_width));
                         let side = if delta < 0 { 0.5 } else { -0.5 };
-                        let amount = side * fade * local_strength * field.confidence;
+                        // Confidence gates creation of the field. Attenuating an
+                        // accepted residual by confidence would intentionally
+                        // leave a measurable fraction of the seam in place.
+                        let amount = side * fade * local_strength;
                         gain = add(gain, scale(field.sample(y), amount));
                     }
                 }
@@ -146,7 +148,7 @@ impl CorrectionModel {
                     if distance < u64::from(blend_width) {
                         let fade = raised_cosine(distance as f64 / f64::from(blend_width));
                         let side = if delta < 0 { 0.5 } else { -0.5 };
-                        let amount = side * fade * local_strength * field.confidence;
+                        let amount = side * fade * local_strength;
                         gain = add(gain, scale(field.sample(x), amount));
                     }
                 }
@@ -666,7 +668,6 @@ fn make_local_field(
         segment_start: analysis.segment_start,
         segment_end: analysis.segment_end,
         profile,
-        confidence: analysis.confidence,
     }
 }
 
@@ -719,6 +720,84 @@ mod tests {
         }
     }
 
+    /// Synthetic tile pair whose VAE-like color/exposure offset changes at
+    /// every Y position. This exercises the per-position seam profile rather
+    /// than only the globally solved tile gain.
+    struct VariableSeam {
+        width: u32,
+        height: u32,
+    }
+
+    impl VariableSeam {
+        fn jump(&self, y: u32) -> Rgb {
+            let phase = 2.0 * PI * f64::from(y) / f64::from(self.height);
+            [
+                0.08 + 0.035 * phase.sin(),
+                -0.03 + 0.02 * phase.cos(),
+                0.04 + 0.025 * (phase + 0.7).sin(),
+            ]
+        }
+    }
+
+    impl PixelSource for VariableSeam {
+        fn width(&self) -> u32 {
+            self.width
+        }
+
+        fn height(&self) -> u32 {
+            self.height
+        }
+
+        fn linear_rgb(&self, x: u32, y: u32) -> Option<Rgb> {
+            let base = [
+                0.28 + 0.000_10 * f64::from(y),
+                0.24 + 0.000_08 * f64::from(y),
+                0.20 + 0.000_06 * f64::from(y),
+            ];
+            Some(if x < self.width / 2 {
+                base
+            } else {
+                crate::color::apply_log_gain(base, self.jump(y))
+            })
+        }
+    }
+
+    struct MultiTileGrid {
+        width: u32,
+        height: u32,
+        columns: u32,
+        rows: u32,
+    }
+
+    impl MultiTileGrid {
+        fn tile_gain(&self, x: u32, y: u32) -> Rgb {
+            let column = (x * self.columns / self.width).min(self.columns - 1);
+            let row = (y * self.rows / self.height).min(self.rows - 1);
+            [
+                0.03 * f64::from(column) - 0.02 * f64::from(row),
+                -0.02 * f64::from(column) + 0.015 * f64::from(row),
+                0.01 * f64::from(column + row),
+            ]
+        }
+    }
+
+    impl PixelSource for MultiTileGrid {
+        fn width(&self) -> u32 {
+            self.width
+        }
+
+        fn height(&self) -> u32 {
+            self.height
+        }
+
+        fn linear_rgb(&self, x: u32, y: u32) -> Option<Rgb> {
+            Some(crate::color::apply_log_gain(
+                [0.31, 0.27, 0.23],
+                self.tile_gain(x, y),
+            ))
+        }
+    }
+
     #[test]
     fn recovers_a_step_without_mistaking_a_linear_gradient_for_it() {
         let source = Synthetic {
@@ -758,5 +837,154 @@ mod tests {
         let right = model.log_gain_at(220, 64)[0];
         assert_abs_diff_eq!(right - left, -1.1_f64.ln(), epsilon = 0.01);
         assert!(model.report.boundaries[0].accepted);
+    }
+
+    #[test]
+    fn scanwalk_builds_a_position_varying_residual_field() {
+        let source = VariableSeam {
+            width: 512,
+            height: 512,
+        };
+        let config = CorrectionConfig {
+            seams: SeamSpec {
+                grid: Some(GridSpec {
+                    columns: 2,
+                    rows: 1,
+                }),
+                ..SeamSpec::default()
+            },
+            scan_radius: 6,
+            sample_stride: 1,
+            refine_radius: 0,
+            blend_width: 64,
+            profile_smooth_radius: 0,
+            strength: 1.0,
+            local_strength: 1.0,
+            max_gain_stops: 1.0,
+            transfer: TransferFunction::Linear,
+            min_confidence: 0.05,
+            ..CorrectionConfig::default()
+        };
+        let model = build_model(
+            &source,
+            &config,
+            ImageReport {
+                width: source.width,
+                height: source.height,
+                channels: 3,
+                bit_depth: "96-bit RGB float (32 bits/channel)".to_owned(),
+                transport: "synthetic".to_owned(),
+            },
+        )
+        .unwrap();
+        assert!(model.report.boundaries[0].accepted);
+
+        let seam = source.width / 2;
+        let mut correction_differences = Vec::new();
+        for y in [32, 128, 256, 384, 479] {
+            let left = source.linear_rgb(seam - 1, y).unwrap();
+            let right = source.linear_rgb(seam, y).unwrap();
+            let left_gain = model.log_gain_at(seam - 1, y);
+            let right_gain = model.log_gain_at(seam, y);
+            let correction_difference = sub(right_gain, left_gain);
+            correction_differences.push(correction_difference[0]);
+            for channel in 0..3 {
+                let corrected_jump = right[channel].ln() + right_gain[channel]
+                    - left[channel].ln()
+                    - left_gain[channel];
+                assert_abs_diff_eq!(corrected_jump, 0.0, epsilon = 0.001);
+            }
+        }
+
+        let range = correction_differences
+            .iter()
+            .copied()
+            .max_by(f64::total_cmp)
+            .unwrap()
+            - correction_differences
+                .iter()
+                .copied()
+                .min_by(f64::total_cmp)
+                .unwrap();
+        assert!(
+            range > 0.05,
+            "the correction field was unexpectedly uniform"
+        );
+    }
+
+    #[test]
+    fn reconciles_every_neighbor_in_a_three_by_four_grid() {
+        let source = MultiTileGrid {
+            width: 300,
+            height: 400,
+            columns: 3,
+            rows: 4,
+        };
+        let config = CorrectionConfig {
+            seams: SeamSpec {
+                grid: Some(GridSpec {
+                    columns: source.columns,
+                    rows: source.rows,
+                }),
+                ..SeamSpec::default()
+            },
+            scan_radius: 4,
+            sample_stride: 1,
+            refine_radius: 0,
+            blend_width: 32,
+            profile_smooth_radius: 8,
+            strength: 1.0,
+            local_strength: 1.0,
+            max_gain_stops: 1.0,
+            transfer: TransferFunction::Linear,
+            min_confidence: 0.05,
+            ..CorrectionConfig::default()
+        };
+        let model = build_model(
+            &source,
+            &config,
+            ImageReport {
+                width: source.width,
+                height: source.height,
+                channels: 3,
+                bit_depth: "96-bit RGB float (32 bits/channel)".to_owned(),
+                transport: "synthetic".to_owned(),
+            },
+        )
+        .unwrap();
+
+        // Two vertical lines split across four rows plus three horizontal
+        // lines split across three columns: 2*4 + 3*3 = 17 adjacencies.
+        assert_eq!(model.report.layout.tile_count(), 12);
+        assert_eq!(model.report.boundaries.len(), 17);
+        assert!(model.report.boundaries.iter().all(|item| item.accepted));
+
+        for x in [100, 200] {
+            for y in [50, 150, 250, 350] {
+                assert_corrected_neighbors_match(&source, &model, (x - 1, y), (x, y));
+            }
+        }
+        for y in [100, 200, 300] {
+            for x in [50, 150, 250] {
+                assert_corrected_neighbors_match(&source, &model, (x, y - 1), (x, y));
+            }
+        }
+    }
+
+    fn assert_corrected_neighbors_match<S: PixelSource>(
+        source: &S,
+        model: &CorrectionModel,
+        a: (u32, u32),
+        b: (u32, u32),
+    ) {
+        let a_rgb = source.linear_rgb(a.0, a.1).unwrap();
+        let b_rgb = source.linear_rgb(b.0, b.1).unwrap();
+        let a_gain = model.log_gain_at(a.0, a.1);
+        let b_gain = model.log_gain_at(b.0, b.1);
+        for channel in 0..3 {
+            let corrected_a = a_rgb[channel].ln() + a_gain[channel];
+            let corrected_b = b_rgb[channel].ln() + b_gain[channel];
+            assert_abs_diff_eq!(corrected_a, corrected_b, epsilon = 0.001);
+        }
     }
 }

@@ -149,12 +149,7 @@ impl PngStage {
             width: self.info.width,
             height: self.info.height,
             channels: self.channels,
-            bit_depth: match self.info.bit_depth {
-                BitDepth::Eight => "u8",
-                BitDepth::Sixteen => "u16",
-                _ => "unsupported",
-            }
-            .to_owned(),
+            bit_depth: png_depth_label(self.info.color_type, self.info.bit_depth),
             transport: "png-mmap".to_owned(),
         }
     }
@@ -352,7 +347,7 @@ fn validate_info(info: &Info<'_>) -> Result<()> {
     ensure!(!info.is_animated(), "animated PNGs are not supported");
     ensure!(
         matches!(info.bit_depth, BitDepth::Eight | BitDepth::Sixteen),
-        "only 8-bit and 16-bit PNG samples are supported"
+        "only 8-bit and 16-bit-per-channel PNG samples are supported"
     );
     ensure!(
         !matches!(info.color_type, ColorType::Indexed),
@@ -398,6 +393,23 @@ fn write_sample(data: &mut [u8], offset: usize, depth: BitDepth, value: f64) {
 
 fn has_alpha(color_type: ColorType) -> bool {
     matches!(color_type, ColorType::GrayscaleAlpha | ColorType::Rgba)
+}
+
+fn png_depth_label(color_type: ColorType, depth: BitDepth) -> String {
+    let channel_bits = match depth {
+        BitDepth::Eight => 8,
+        BitDepth::Sixteen => 16,
+        _ => 0,
+    };
+    let pixel_bits = color_type.samples() * channel_bits;
+    let format = match color_type {
+        ColorType::Grayscale => "grayscale",
+        ColorType::GrayscaleAlpha => "grayscale+alpha",
+        ColorType::Rgb => "RGB",
+        ColorType::Rgba => "RGBA",
+        ColorType::Indexed => "indexed",
+    };
+    format!("{pixel_bits}-bit {format} ({channel_bits} bits/channel)")
 }
 
 fn owned_info(info: &Info<'_>) -> Info<'static> {
@@ -580,5 +592,50 @@ mod tests {
             .unwrap();
         assert_eq!(reader.info().bit_depth, BitDepth::Sixteen);
         assert_eq!(reader.info().color_type, ColorType::Rgb);
+    }
+
+    #[test]
+    fn recognizes_standard_twenty_four_bit_rgb() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("rgb24.png");
+        let (width, height) = (32_u32, 16_u32);
+        let mut source = Vec::with_capacity(width as usize * height as usize * 3);
+        for _y in 0..height {
+            for x in 0..width {
+                let value = if x < width / 2 { 80_u8 } else { 96_u8 };
+                source.extend_from_slice(&[value, value, value]);
+            }
+        }
+        {
+            let file = File::create(&input).unwrap();
+            let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(BitDepth::Eight);
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&source)
+                .unwrap();
+        }
+        let report = analyze_png(
+            &input,
+            &CorrectionConfig {
+                seams: SeamSpec {
+                    grid: Some(GridSpec {
+                        columns: 2,
+                        rows: 1,
+                    }),
+                    ..SeamSpec::default()
+                },
+                scan_radius: 3,
+                refine_radius: 0,
+                sample_stride: 1,
+                transfer: TransferFunction::Linear,
+                ..CorrectionConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(report.image.channels, 3);
+        assert_eq!(report.image.bit_depth, "24-bit RGB (8 bits/channel)");
     }
 }

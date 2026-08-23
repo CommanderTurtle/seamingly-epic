@@ -44,7 +44,7 @@ pub struct CorrectionConfig {
     pub scan_radius: u32,
     /// Search this many pixels around nominal coordinates for a stronger persistent step.
     pub refine_radius: u32,
-    /// Sample every Nth pixel along a boundary.
+    /// Sample every Nth pixel along a boundary. One performs a complete scanline walk.
     pub sample_stride: u32,
     /// Width over which the optional local residual field fades to zero.
     pub blend_width: u32,
@@ -72,12 +72,12 @@ impl Default for CorrectionConfig {
                 ..SeamSpec::default()
             },
             scan_radius: 8,
-            refine_radius: 2,
-            sample_stride: 4,
+            refine_radius: 0,
+            sample_stride: 1,
             blend_width: 192,
             profile_smooth_radius: 96,
             strength: 1.0,
-            local_strength: 0.65,
+            local_strength: 1.0,
             max_gain_stops: 0.75,
             min_confidence: 0.18,
             transfer: TransferFunction::Srgb,

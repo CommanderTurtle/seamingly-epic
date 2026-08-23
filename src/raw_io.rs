@@ -119,7 +119,15 @@ pub fn correct_raw_f32(descriptor_path: impl AsRef<Path>) -> Result<Vec<Correcti
                 width: descriptor.width,
                 height: descriptor.height,
                 channels: descriptor.channels,
-                bit_depth: "f32".to_owned(),
+                bit_depth: format!(
+                    "{}-bit {} float (32 bits/channel)",
+                    descriptor.channels * 32,
+                    if descriptor.channels == 3 {
+                        "RGB"
+                    } else {
+                        "RGBA"
+                    }
+                ),
                 transport: format!("raw-f32-batch-{batch_index}"),
             },
         )?;

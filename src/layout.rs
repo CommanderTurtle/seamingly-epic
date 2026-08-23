@@ -184,4 +184,23 @@ mod tests {
         assert_eq!(five.y_seams, [200, 400, 600, 800]);
         assert_eq!(five.tile_count(), 25);
     }
+
+    #[test]
+    fn derives_a_three_by_two_grid_from_explicit_lines() {
+        let layout = Layout::resolve(
+            9000,
+            8192,
+            &SeamSpec {
+                x: vec![3084, 5887],
+                y: vec![4096],
+                grid: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(layout.columns(), 3);
+        assert_eq!(layout.rows(), 2);
+        assert_eq!(layout.tile_count(), 6);
+        assert_eq!(layout.x_edges(), [0, 3084, 5887, 9000]);
+        assert_eq!(layout.y_edges(), [0, 4096, 8192]);
+    }
 }
