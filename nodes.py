@@ -28,6 +28,10 @@ from .runtime import (
     temporary_directory,
     write_json,
 )
+from .tutorial_nodes import (
+    TUTORIAL_NODE_CLASS_MAPPINGS,
+    TUTORIAL_NODE_DISPLAY_NAME_MAPPINGS,
+)
 
 CATEGORY = "image/seamingly epic"
 
@@ -469,9 +473,11 @@ NODE_CLASS_MAPPINGS = {
     "SeaminglyEpicFile": SeaminglyEpicFile,
     "SeaminglyEpicReferenceRepair": SeaminglyEpicReferenceRepair,
 }
+NODE_CLASS_MAPPINGS.update(TUTORIAL_NODE_CLASS_MAPPINGS)
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SeaminglyEpicImage": "Seamingly Epic — Native IMAGE",
     "SeaminglyEpicFile": "Seamingly Epic — Streaming PNG",
     "SeaminglyEpicReferenceRepair": "Seamingly Epic — Reference Repair",
 }
+NODE_DISPLAY_NAME_MAPPINGS.update(TUTORIAL_NODE_DISPLAY_NAME_MAPPINGS)
