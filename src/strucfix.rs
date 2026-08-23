@@ -2,9 +2,10 @@
 //!
 //! The portrait reference crosses the base image's vertical join without a
 //! vertical tile boundary. The landscape reference does the analogous job for
-//! the horizontal join. Distant correspondence samples estimate light balance
-//! without defining visible coverage. Four nearest-agreement support curves
-//! confine the actual reference pixels to a narrow, raised-cosine alpha cross.
+//! the horizontal join. Four unrestricted structural-match curves define an
+//! irregular cross. At each curve, the reference's inner bands are matched to
+//! the authoritative base's outer bands before a raised-cosine alpha wave is
+//! evaluated from the original join to that curve.
 
 use std::{f64::consts::PI, fs, path::Path};
 
@@ -13,15 +14,17 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    color::{Rgb, apply_log_gain, norm, sub},
+    color::{Rgb, add, apply_log_gain, log_rgb, norm, scale, sub},
     config::TransferFunction,
     png_io::{PngStage, copy_png_verbatim, validate_output_target},
     report::ImageReport,
-    robust::{median, smooth_profile},
+    robust::{median, robust_rgb, smooth_profile},
 };
 
 const TRANSFER: TransferFunction = TransferFunction::Srgb;
 const MAX_MATCH_GAIN_STOPS: f64 = 0.75;
+const BOUNDARY_SCAN_RADIUS: u32 = 8;
+const GAIN_PROFILE_SMOOTH_RADIUS: usize = 96;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CrossReferenceReport {
@@ -77,10 +80,8 @@ struct CrossGeometry {
 struct VerticalPlan {
     geometry: CrossGeometry,
     seam: u32,
-    left_support: Vec<f64>,
-    right_support: Vec<f64>,
-    left_match_distance: Vec<f64>,
-    right_match_distance: Vec<f64>,
+    left_distance: Vec<f64>,
+    right_distance: Vec<f64>,
     left_gain: Vec<Rgb>,
     right_gain: Vec<Rgb>,
     center_gain: Vec<Rgb>,
@@ -90,10 +91,8 @@ struct VerticalPlan {
 struct HorizontalPlan {
     geometry: CrossGeometry,
     seam: u32,
-    top_support: Vec<f64>,
-    bottom_support: Vec<f64>,
-    top_match_distance: Vec<f64>,
-    bottom_match_distance: Vec<f64>,
+    top_distance: Vec<f64>,
+    bottom_distance: Vec<f64>,
     top_gain: Vec<Rgb>,
     bottom_gain: Vec<Rgb>,
     center_gain: Vec<Rgb>,
@@ -130,13 +129,13 @@ pub fn strucfix_png(
 
     let x_geometry = landscape_geometry(width, height, y, x_reference.dimensions())?;
     let y_geometry = portrait_geometry(width, height, x, y_reference.dimensions())?;
-    let vertical = build_vertical_plan(&base, &y_reference, y_geometry, x, y)?;
-    let horizontal = build_horizontal_plan(&base, &x_reference, x_geometry, y, x)?;
+    let vertical = build_vertical_plan(&base, &y_reference, y_geometry, x)?;
+    let horizontal = build_horizontal_plan(&base, &x_reference, x_geometry, y)?;
 
-    let left_stitch = range_report(&vertical.left_support);
-    let right_stitch = range_report(&vertical.right_support);
-    let top_stitch = range_report(&horizontal.top_support);
-    let bottom_stitch = range_report(&horizontal.bottom_support);
+    let left_stitch = range_report(&vertical.left_distance);
+    let right_stitch = range_report(&vertical.right_distance);
+    let top_stitch = range_report(&horizontal.top_distance);
+    let bottom_stitch = range_report(&horizontal.bottom_distance);
 
     let changed_pixels = base.map_linear_rgb(TRANSFER, 0, |px, py, original| {
         let vertical_sample = vertical.sample(&y_reference, px, py);
@@ -151,8 +150,8 @@ pub fn strucfix_png(
     }
 
     Ok(StructuralReport {
-        version: 2,
-        strategy: "registered_cross_local_alpha_blob_raised_cosine".to_owned(),
+        version: 3,
+        strategy: "registered_cross_unrestricted_boundary_matched_wave".to_owned(),
         image: base.image_report(),
         x,
         y,
@@ -267,16 +266,15 @@ fn build_vertical_plan(
     reference: &PngStage,
     geometry: CrossGeometry,
     seam: u32,
-    orthogonal_seam: u32,
 ) -> Result<VerticalPlan> {
     let half = geometry.width / 2;
     ensure!(
         geometry.origin_x + half == seam,
         "--ycross is not centered exactly on --x"
     );
-    let (match_minimum, match_maximum, match_step) = match_search_bounds(half)?;
+    let (minimum, maximum, step) = match_search_bounds(half)?;
     let height = geometry.height;
-    let raw_left_match: Vec<f64> = (0..height)
+    let raw_left: Vec<f64> = (0..height)
         .into_par_iter()
         .map(|y| {
             best_vertical_distance(
@@ -286,13 +284,13 @@ fn build_vertical_plan(
                 seam,
                 y,
                 Side::Negative,
-                match_minimum,
-                match_maximum,
-                match_step,
+                minimum,
+                maximum,
+                step,
             ) as f64
         })
         .collect();
-    let raw_right_match: Vec<f64> = (0..height)
+    let raw_right: Vec<f64> = (0..height)
         .into_par_iter()
         .map(|y| {
             best_vertical_distance(
@@ -302,77 +300,49 @@ fn build_vertical_plan(
                 seam,
                 y,
                 Side::Positive,
-                match_minimum,
-                match_maximum,
-                match_step,
+                minimum,
+                maximum,
+                step,
             ) as f64
         })
         .collect();
-    let left_match_distance = smooth_distances(&raw_left_match, match_minimum, match_maximum);
-    let right_match_distance = smooth_distances(&raw_right_match, match_minimum, match_maximum);
-    let left_gain = vertical_gain_profile(
-        base,
-        reference,
-        geometry,
-        seam,
-        Side::Negative,
-        &left_match_distance,
-        orthogonal_seam,
-    );
-    let right_gain = vertical_gain_profile(
-        base,
-        reference,
-        geometry,
-        seam,
-        Side::Positive,
-        &right_match_distance,
-        orthogonal_seam,
-    );
-    let center_gain = left_gain
-        .iter()
-        .zip(&right_gain)
-        .map(|(left, right)| std::array::from_fn(|channel| (left[channel] + right[channel]) * 0.5))
-        .collect();
-    let (support_minimum, support_maximum) = support_search_bounds(half)?;
-    let raw_left_support: Vec<f64> = (0..height)
+    let left_distance = smooth_distances(&raw_left, minimum, maximum);
+    let right_distance = smooth_distances(&raw_right, minimum, maximum);
+    let left_observations: Vec<Option<GainObservation>> = (0..height)
         .into_par_iter()
         .map(|y| {
-            nearest_vertical_support(
+            vertical_boundary_gain(
                 base,
                 reference,
                 geometry,
                 seam,
                 y,
                 Side::Negative,
-                support_minimum,
-                support_maximum,
-            ) as f64
+                left_distance[y as usize].round() as u32,
+            )
         })
         .collect();
-    let raw_right_support: Vec<f64> = (0..height)
+    let right_observations: Vec<Option<GainObservation>> = (0..height)
         .into_par_iter()
         .map(|y| {
-            nearest_vertical_support(
+            vertical_boundary_gain(
                 base,
                 reference,
                 geometry,
                 seam,
                 y,
                 Side::Positive,
-                support_minimum,
-                support_maximum,
-            ) as f64
+                right_distance[y as usize].round() as u32,
+            )
         })
         .collect();
-    let left_support = smooth_distances(&raw_left_support, support_minimum, support_maximum);
-    let right_support = smooth_distances(&raw_right_support, support_minimum, support_maximum);
+    let (left_gain, right_gain) = matched_gain_profiles(&left_observations, &right_observations);
+    let center_gain = center_gain_profile(&left_gain, &right_gain, &left_distance, &right_distance);
     Ok(VerticalPlan {
         geometry,
         seam,
-        left_support,
-        right_support,
-        left_match_distance,
-        right_match_distance,
+        left_distance,
+        right_distance,
         left_gain,
         right_gain,
         center_gain,
@@ -384,16 +354,15 @@ fn build_horizontal_plan(
     reference: &PngStage,
     geometry: CrossGeometry,
     seam: u32,
-    orthogonal_seam: u32,
 ) -> Result<HorizontalPlan> {
     let half = geometry.height / 2;
     ensure!(
         geometry.origin_y + half == seam,
         "--xcross is not centered exactly on --y"
     );
-    let (match_minimum, match_maximum, match_step) = match_search_bounds(half)?;
+    let (minimum, maximum, step) = match_search_bounds(half)?;
     let width = geometry.width;
-    let raw_top_match: Vec<f64> = (0..width)
+    let raw_top: Vec<f64> = (0..width)
         .into_par_iter()
         .map(|x| {
             best_horizontal_distance(
@@ -403,13 +372,13 @@ fn build_horizontal_plan(
                 seam,
                 x,
                 Side::Negative,
-                match_minimum,
-                match_maximum,
-                match_step,
+                minimum,
+                maximum,
+                step,
             ) as f64
         })
         .collect();
-    let raw_bottom_match: Vec<f64> = (0..width)
+    let raw_bottom: Vec<f64> = (0..width)
         .into_par_iter()
         .map(|x| {
             best_horizontal_distance(
@@ -419,77 +388,49 @@ fn build_horizontal_plan(
                 seam,
                 x,
                 Side::Positive,
-                match_minimum,
-                match_maximum,
-                match_step,
+                minimum,
+                maximum,
+                step,
             ) as f64
         })
         .collect();
-    let top_match_distance = smooth_distances(&raw_top_match, match_minimum, match_maximum);
-    let bottom_match_distance = smooth_distances(&raw_bottom_match, match_minimum, match_maximum);
-    let top_gain = horizontal_gain_profile(
-        base,
-        reference,
-        geometry,
-        seam,
-        Side::Negative,
-        &top_match_distance,
-        orthogonal_seam,
-    );
-    let bottom_gain = horizontal_gain_profile(
-        base,
-        reference,
-        geometry,
-        seam,
-        Side::Positive,
-        &bottom_match_distance,
-        orthogonal_seam,
-    );
-    let center_gain = top_gain
-        .iter()
-        .zip(&bottom_gain)
-        .map(|(top, bottom)| std::array::from_fn(|channel| (top[channel] + bottom[channel]) * 0.5))
-        .collect();
-    let (support_minimum, support_maximum) = support_search_bounds(half)?;
-    let raw_top_support: Vec<f64> = (0..width)
+    let top_distance = smooth_distances(&raw_top, minimum, maximum);
+    let bottom_distance = smooth_distances(&raw_bottom, minimum, maximum);
+    let top_observations: Vec<Option<GainObservation>> = (0..width)
         .into_par_iter()
         .map(|x| {
-            nearest_horizontal_support(
+            horizontal_boundary_gain(
                 base,
                 reference,
                 geometry,
                 seam,
                 x,
                 Side::Negative,
-                support_minimum,
-                support_maximum,
-            ) as f64
+                top_distance[x as usize].round() as u32,
+            )
         })
         .collect();
-    let raw_bottom_support: Vec<f64> = (0..width)
+    let bottom_observations: Vec<Option<GainObservation>> = (0..width)
         .into_par_iter()
         .map(|x| {
-            nearest_horizontal_support(
+            horizontal_boundary_gain(
                 base,
                 reference,
                 geometry,
                 seam,
                 x,
                 Side::Positive,
-                support_minimum,
-                support_maximum,
-            ) as f64
+                bottom_distance[x as usize].round() as u32,
+            )
         })
         .collect();
-    let top_support = smooth_distances(&raw_top_support, support_minimum, support_maximum);
-    let bottom_support = smooth_distances(&raw_bottom_support, support_minimum, support_maximum);
+    let (top_gain, bottom_gain) = matched_gain_profiles(&top_observations, &bottom_observations);
+    let center_gain = center_gain_profile(&top_gain, &bottom_gain, &top_distance, &bottom_distance);
     Ok(HorizontalPlan {
         geometry,
         seam,
-        top_support,
-        bottom_support,
-        top_match_distance,
-        bottom_match_distance,
+        top_distance,
+        bottom_distance,
         top_gain,
         bottom_gain,
         center_gain,
@@ -505,18 +446,6 @@ fn match_search_bounds(half_span: u32) -> Result<(u32, u32, u32)> {
     ensure!(minimum < maximum, "cross-reference stitch search is empty");
     let step = if maximum - minimum >= 1024 { 2 } else { 1 };
     Ok((minimum, maximum, step))
-}
-
-fn support_search_bounds(half_span: u32) -> Result<(u32, u32)> {
-    let minimum = (half_span / 1024).clamp(3, 8);
-    let maximum = (half_span / 8)
-        .max(minimum + 8)
-        .min(half_span.saturating_sub(2));
-    ensure!(
-        minimum < maximum,
-        "cross-reference local support search is empty"
-    );
-    Ok((minimum, maximum))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -573,112 +502,6 @@ fn best_horizontal_distance(
             y - geometry.origin_y,
         )
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn nearest_vertical_support(
-    base: &PngStage,
-    reference: &PngStage,
-    geometry: CrossGeometry,
-    seam: u32,
-    y: u32,
-    side: Side,
-    minimum: u32,
-    maximum: u32,
-) -> u32 {
-    nearest_agreement_distance(minimum, maximum, |distance| {
-        let x = match side {
-            Side::Negative => seam - 1 - distance,
-            Side::Positive => seam + distance,
-        };
-        structural_cost(
-            base,
-            reference,
-            x,
-            y,
-            x - geometry.origin_x,
-            y - geometry.origin_y,
-        )
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn nearest_horizontal_support(
-    base: &PngStage,
-    reference: &PngStage,
-    geometry: CrossGeometry,
-    seam: u32,
-    x: u32,
-    side: Side,
-    minimum: u32,
-    maximum: u32,
-) -> u32 {
-    nearest_agreement_distance(minimum, maximum, |distance| {
-        let y = match side {
-            Side::Negative => seam - 1 - distance,
-            Side::Positive => seam + distance,
-        };
-        structural_cost(
-            base,
-            reference,
-            x,
-            y,
-            x - geometry.origin_x,
-            y - geometry.origin_y,
-        )
-    })
-}
-
-fn nearest_agreement_distance<F>(minimum: u32, maximum: u32, cost: F) -> u32
-where
-    F: Fn(u32) -> Option<f64>,
-{
-    let mut costs: Vec<f64> = (minimum..=maximum)
-        .map(|distance| cost(distance).unwrap_or(f64::INFINITY))
-        .collect();
-    let finite_max = costs
-        .iter()
-        .copied()
-        .filter(|value| value.is_finite())
-        .fold(0.0_f64, f64::max);
-    if finite_max == 0.0 && costs.iter().all(|value| !value.is_finite()) {
-        return minimum;
-    }
-    let invalid_cost = finite_max.mul_add(2.0, 1.0);
-    for value in &mut costs {
-        if !value.is_finite() {
-            *value = invalid_cost;
-        }
-    }
-    let smoothed = box_smooth_scalar(&box_smooth_scalar(&costs, 2), 2);
-    let tail_start = smoothed.len() * 3 / 4;
-    let mut tail = smoothed[tail_start..].to_vec();
-    let baseline = median(&mut tail);
-    let mut deviations: Vec<f64> = smoothed[tail_start..]
-        .iter()
-        .map(|value| (value - baseline).abs())
-        .collect();
-    let dispersion = 1.4826 * median(&mut deviations);
-    let tolerance = (1.5 * dispersion).max(0.08 * baseline.abs()).max(1.0e-4);
-    let threshold = baseline + tolerance;
-    let stable_run = (smoothed.len() / 32).clamp(3, 9);
-
-    for index in 0..=smoothed.len().saturating_sub(stable_run) {
-        let run = &smoothed[index..index + stable_run];
-        let run_mean = run.iter().sum::<f64>() / run.len() as f64;
-        if smoothed[index] <= threshold && run_mean <= threshold {
-            return minimum + index as u32;
-        }
-    }
-
-    smoothed
-        .iter()
-        .enumerate()
-        .min_by(|(left_index, left), (right_index, right)| {
-            left.total_cmp(right)
-                .then_with(|| left_index.cmp(right_index))
-        })
-        .map_or(minimum, |(index, _)| minimum + index as u32)
 }
 
 fn best_distance<F>(minimum: u32, maximum: u32, step: u32, cost: F) -> u32
@@ -800,121 +623,235 @@ fn box_smooth_scalar(values: &[f64], radius: usize) -> Vec<f64> {
         .collect()
 }
 
-fn vertical_gain_profile(
+#[derive(Clone, Copy, Debug)]
+struct GainObservation {
+    gain: Rgb,
+    weight: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BandStatistics {
+    mean: Rgb,
+    dispersion: f64,
+    coverage: f64,
+}
+
+fn vertical_boundary_gain(
     base: &PngStage,
     reference: &PngStage,
     geometry: CrossGeometry,
     seam: u32,
+    y: u32,
     side: Side,
-    distances: &[f64],
-    orthogonal_seam: u32,
-) -> Vec<Rgb> {
-    let raw: Vec<Rgb> = distances
-        .par_iter()
-        .enumerate()
-        .map(|(y, distance)| {
-            let distance = distance.round() as u32;
-            let x = match side {
-                Side::Negative => seam - 1 - distance,
-                Side::Positive => seam + distance,
-            };
-            estimate_match_gain(
-                base,
-                reference,
-                x,
-                y as u32,
-                x - geometry.origin_x,
-                y as u32 - geometry.origin_y,
-            )
-        })
-        .collect();
-    smooth_gain_segments(&raw, orthogonal_seam as usize)
+    distance: u32,
+) -> Option<GainObservation> {
+    let split = match side {
+        Side::Negative => seam.checked_sub(distance)?,
+        Side::Positive => seam.checked_add(distance)?,
+    };
+    let ranges = boundary_ranges(split, side, BOUNDARY_SCAN_RADIUS)?;
+    let reference_y = y.checked_sub(geometry.origin_y)?;
+    let outer_far = log_band(ranges[0].0, ranges[0].1, |axis| {
+        base.linear_rgb_with_transfer(axis, y, TRANSFER)
+    })?;
+    let outer_near = log_band(ranges[1].0, ranges[1].1, |axis| {
+        base.linear_rgb_with_transfer(axis, y, TRANSFER)
+    })?;
+    let inner_near = log_band(ranges[2].0, ranges[2].1, |axis| {
+        axis.checked_sub(geometry.origin_x)
+            .and_then(|local_x| reference.linear_rgb_with_transfer(local_x, reference_y, TRANSFER))
+    })?;
+    let inner_far = log_band(ranges[3].0, ranges[3].1, |axis| {
+        axis.checked_sub(geometry.origin_x)
+            .and_then(|local_x| reference.linear_rgb_with_transfer(local_x, reference_y, TRANSFER))
+    })?;
+    boundary_gain_observation(outer_far, outer_near, inner_near, inner_far)
 }
 
-fn horizontal_gain_profile(
+fn horizontal_boundary_gain(
     base: &PngStage,
     reference: &PngStage,
     geometry: CrossGeometry,
     seam: u32,
+    x: u32,
     side: Side,
-    distances: &[f64],
-    orthogonal_seam: u32,
-) -> Vec<Rgb> {
-    let raw: Vec<Rgb> = distances
-        .par_iter()
-        .enumerate()
-        .map(|(x, distance)| {
-            let distance = distance.round() as u32;
-            let y = match side {
-                Side::Negative => seam - 1 - distance,
-                Side::Positive => seam + distance,
-            };
-            estimate_match_gain(
-                base,
-                reference,
-                x as u32,
-                y,
-                x as u32 - geometry.origin_x,
-                y - geometry.origin_y,
-            )
-        })
-        .collect();
-    smooth_gain_segments(&raw, orthogonal_seam as usize)
+    distance: u32,
+) -> Option<GainObservation> {
+    let split = match side {
+        Side::Negative => seam.checked_sub(distance)?,
+        Side::Positive => seam.checked_add(distance)?,
+    };
+    let ranges = boundary_ranges(split, side, BOUNDARY_SCAN_RADIUS)?;
+    let reference_x = x.checked_sub(geometry.origin_x)?;
+    let outer_far = log_band(ranges[0].0, ranges[0].1, |axis| {
+        base.linear_rgb_with_transfer(x, axis, TRANSFER)
+    })?;
+    let outer_near = log_band(ranges[1].0, ranges[1].1, |axis| {
+        base.linear_rgb_with_transfer(x, axis, TRANSFER)
+    })?;
+    let inner_near = log_band(ranges[2].0, ranges[2].1, |axis| {
+        axis.checked_sub(geometry.origin_y)
+            .and_then(|local_y| reference.linear_rgb_with_transfer(reference_x, local_y, TRANSFER))
+    })?;
+    let inner_far = log_band(ranges[3].0, ranges[3].1, |axis| {
+        axis.checked_sub(geometry.origin_y)
+            .and_then(|local_y| reference.linear_rgb_with_transfer(reference_x, local_y, TRANSFER))
+    })?;
+    boundary_gain_observation(outer_far, outer_near, inner_near, inner_far)
 }
 
-fn smooth_gain_segments(raw: &[Rgb], seam: usize) -> Vec<Rgb> {
-    let seam = seam.min(raw.len());
-    if seam == 0 || seam == raw.len() {
-        let radius = (raw.len() / 512).clamp(8, 32);
-        return smooth_profile(raw, radius);
-    }
-    let mut smoothed = Vec::with_capacity(raw.len());
-    let first_radius = (seam / 512).clamp(8, 32);
-    let second_radius = ((raw.len() - seam) / 512).clamp(8, 32);
-    smoothed.extend(smooth_profile(&raw[..seam], first_radius));
-    smoothed.extend(smooth_profile(&raw[seam..], second_radius));
-    smoothed
-}
-
-fn estimate_match_gain(
-    base: &PngStage,
-    reference: &PngStage,
-    base_x: u32,
-    base_y: u32,
-    reference_x: u32,
-    reference_y: u32,
-) -> Rgb {
-    let mut channels = [Vec::new(), Vec::new(), Vec::new()];
-    for dy in -2_i32..=2 {
-        for dx in -2_i32..=2 {
-            let Some(base_rgb) = offset_sample(base, base_x, base_y, dx, dy) else {
-                continue;
-            };
-            let Some(reference_rgb) = offset_sample(reference, reference_x, reference_y, dx, dy)
-            else {
-                continue;
-            };
-            for channel in 0..3 {
-                let source = reference_rgb[channel];
-                let target = base_rgb[channel];
-                if source > 1.0 / 65_535.0
-                    && target > 1.0 / 65_535.0
-                    && source < 0.995
-                    && target < 0.995
-                {
-                    channels[channel].push((target / source).ln());
-                }
-            }
-        }
-    }
-    let limit = MAX_MATCH_GAIN_STOPS * std::f64::consts::LN_2;
-    std::array::from_fn(|channel| {
-        if channels[channel].len() < 4 {
-            0.0
-        } else {
-            median(&mut channels[channel]).clamp(-limit, limit)
-        }
+fn boundary_ranges(split: u32, side: Side, radius: u32) -> Option<[(u32, u32); 4]> {
+    let twice = radius.checked_mul(2)?;
+    let before_far = split.checked_sub(twice)?;
+    let before_near = split.checked_sub(radius)?;
+    let after_near = split.checked_add(radius)?;
+    let after_far = split.checked_add(twice)?;
+    Some(match side {
+        Side::Negative => [
+            (before_far, before_near),
+            (before_near, split),
+            (split, after_near),
+            (after_near, after_far),
+        ],
+        Side::Positive => [
+            (after_near, after_far),
+            (split, after_near),
+            (before_near, split),
+            (before_far, before_near),
+        ],
     })
+}
+
+fn log_band<F>(start: u32, end: u32, sample: F) -> Option<BandStatistics>
+where
+    F: Fn(u32) -> Option<Rgb>,
+{
+    if end <= start {
+        return None;
+    }
+    let expected = end - start;
+    let mut sum = [0.0; 3];
+    let mut count = 0_u32;
+    for axis in start..end {
+        if let Some(value) = sample(axis).and_then(log_rgb) {
+            sum = add(sum, value);
+            count += 1;
+        }
+    }
+    if count < expected.div_ceil(2) {
+        return None;
+    }
+    let mean = scale(sum, 1.0 / f64::from(count));
+    let mut dispersion = 0.0;
+    for axis in start..end {
+        if let Some(value) = sample(axis).and_then(log_rgb) {
+            dispersion += norm(sub(value, mean));
+        }
+    }
+    Some(BandStatistics {
+        mean,
+        dispersion: dispersion / f64::from(count),
+        coverage: f64::from(count) / f64::from(expected),
+    })
+}
+
+fn boundary_gain_observation(
+    outer_far: BandStatistics,
+    outer_near: BandStatistics,
+    inner_near: BandStatistics,
+    inner_far: BandStatistics,
+) -> Option<GainObservation> {
+    let outer_at_boundary = sub(scale(outer_near.mean, 1.5), scale(outer_far.mean, 0.5));
+    let inner_at_boundary = sub(scale(inner_near.mean, 1.5), scale(inner_far.mean, 0.5));
+    let texture =
+        outer_far.dispersion + outer_near.dispersion + inner_near.dispersion + inner_far.dispersion;
+    let coverage = outer_far
+        .coverage
+        .min(outer_near.coverage)
+        .min(inner_near.coverage)
+        .min(inner_far.coverage);
+    let weight = coverage / (1.0 + (texture / 0.12).powi(2));
+    (weight > 0.0).then_some(GainObservation {
+        // The outer canonical image is the fixed target. Only this gain is
+        // ever applied, and it is applied solely to the inner reference.
+        gain: sub(outer_at_boundary, inner_at_boundary),
+        weight,
+    })
+}
+
+fn matched_gain_profiles(
+    first: &[Option<GainObservation>],
+    second: &[Option<GainObservation>],
+) -> (Vec<Rgb>, Vec<Rgb>) {
+    let samples: Vec<(Rgb, f64)> = first
+        .iter()
+        .chain(second)
+        .filter_map(|item| item.map(|observation| (observation.gain, observation.weight)))
+        .collect();
+    let estimate = robust_rgb(&samples);
+    let center = estimate.map_or([0.0; 3], |value| value.center);
+    let dispersion = estimate.map_or(0.01, |value| value.dispersion);
+    (
+        stabilize_gain_profile(first, center, dispersion),
+        stabilize_gain_profile(second, center, dispersion),
+    )
+}
+
+fn stabilize_gain_profile(
+    observations: &[Option<GainObservation>],
+    center: Rgb,
+    dispersion: f64,
+) -> Vec<Rgb> {
+    let cutoff = (3.0 * dispersion).max(0.01);
+    let raw: Vec<Rgb> = observations
+        .iter()
+        .map(|item| {
+            let Some(observation) = item else {
+                return center;
+            };
+            let residual = sub(observation.gain, center);
+            let magnitude = norm(residual);
+            let huber = if magnitude <= cutoff {
+                1.0
+            } else {
+                cutoff / magnitude.max(1.0e-12)
+            };
+            add(
+                center,
+                scale(residual, huber * observation.weight.sqrt().clamp(0.0, 1.0)),
+            )
+        })
+        .collect();
+    let radius = GAIN_PROFILE_SMOOTH_RADIUS.min(observations.len().saturating_sub(1) / 2);
+    let limit = MAX_MATCH_GAIN_STOPS * std::f64::consts::LN_2;
+    smooth_profile(&raw, radius)
+        .into_iter()
+        .map(|gain| gain.map(|channel| channel.clamp(-limit, limit)))
+        .collect()
+}
+
+fn center_gain_profile(
+    first_gain: &[Rgb],
+    second_gain: &[Rgb],
+    first_distance: &[f64],
+    second_distance: &[f64],
+) -> Vec<Rgb> {
+    first_gain
+        .iter()
+        .zip(second_gain)
+        .zip(first_distance.iter().zip(second_distance))
+        .map(|((first, second), (first_extent, second_extent))| {
+            let total = first_extent + second_extent;
+            if total <= 0.0 {
+                scale(add(*first, *second), 0.5)
+            } else {
+                add(
+                    scale(*first, second_extent / total),
+                    scale(*second, first_extent / total),
+                )
+            }
+        })
+        .collect()
 }
 
 impl VerticalPlan {
@@ -926,29 +863,27 @@ impl VerticalPlan {
             return None;
         }
         let index = y as usize;
-        let (distance, support, match_distance, edge_gain) = if x < self.seam {
+        let (distance, extent, edge_gain) = if x < self.seam {
             (
                 f64::from(self.seam - 1 - x),
-                self.left_support[index],
-                self.left_match_distance[index],
+                self.left_distance[index],
                 self.left_gain[index],
             )
         } else {
             (
                 f64::from(x - self.seam),
-                self.right_support[index],
-                self.right_match_distance[index],
+                self.right_distance[index],
                 self.right_gain[index],
             )
         };
-        let alpha = raised_cosine(distance, support);
+        let alpha = raised_cosine(distance, extent);
         if alpha <= 0.0 {
             return None;
         }
         let local_x = x - self.geometry.origin_x;
         let local_y = y - self.geometry.origin_y;
         let rgb = reference.linear_rgb_with_transfer(local_x, local_y, TRANSFER)?;
-        let outward = smooth_step((distance / match_distance).clamp(0.0, 1.0));
+        let outward = smooth_step((distance / extent).clamp(0.0, 1.0));
         let gain = interpolate_rgb(self.center_gain[index], edge_gain, outward);
         Some((alpha, apply_log_gain(rgb, gain)))
     }
@@ -963,29 +898,27 @@ impl HorizontalPlan {
             return None;
         }
         let index = x as usize;
-        let (distance, support, match_distance, edge_gain) = if y < self.seam {
+        let (distance, extent, edge_gain) = if y < self.seam {
             (
                 f64::from(self.seam - 1 - y),
-                self.top_support[index],
-                self.top_match_distance[index],
+                self.top_distance[index],
                 self.top_gain[index],
             )
         } else {
             (
                 f64::from(y - self.seam),
-                self.bottom_support[index],
-                self.bottom_match_distance[index],
+                self.bottom_distance[index],
                 self.bottom_gain[index],
             )
         };
-        let alpha = raised_cosine(distance, support);
+        let alpha = raised_cosine(distance, extent);
         if alpha <= 0.0 {
             return None;
         }
         let local_x = x - self.geometry.origin_x;
         let local_y = y - self.geometry.origin_y;
         let rgb = reference.linear_rgb_with_transfer(local_x, local_y, TRANSFER)?;
-        let outward = smooth_step((distance / match_distance).clamp(0.0, 1.0));
+        let outward = smooth_step((distance / extent).clamp(0.0, 1.0));
         let gain = interpolate_rgb(self.center_gain[index], edge_gain, outward);
         Some((alpha, apply_log_gain(rgb, gain)))
     }
@@ -1121,24 +1054,42 @@ mod tests {
     }
 
     #[test]
-    fn local_support_uses_the_nearest_stable_agreement_not_the_later_minimum() {
-        let selected = nearest_agreement_distance(3, 100, |distance| {
-            Some(if (18..=30).contains(&distance) {
-                0.05
-            } else if (55..=65).contains(&distance) {
-                0.01
-            } else if distance >= 75 {
-                0.05
-            } else {
-                1.0
-            })
-        });
-        assert!((18..=22).contains(&selected));
+    fn standard_cross_restores_the_unrestricted_structural_search() {
+        let (minimum, maximum, step) = match_search_bounds(2048).unwrap();
+        assert_eq!((minimum, maximum, step), (512, 2015, 2));
+        assert!(maximum > 7 * 2048 / 8);
     }
 
     #[test]
-    fn standard_cross_support_is_local_but_light_matching_remains_far() {
-        assert_eq!(support_search_bounds(2048).unwrap(), (3, 256));
-        assert_eq!(match_search_bounds(2048).unwrap(), (512, 2015, 2));
+    fn boundary_bands_keep_the_outer_base_and_inner_reference_distinct() {
+        assert_eq!(
+            boundary_ranges(100, Side::Negative, 8).unwrap(),
+            [(84, 92), (92, 100), (100, 108), (108, 116)]
+        );
+        assert_eq!(
+            boundary_ranges(100, Side::Positive, 8).unwrap(),
+            [(108, 116), (100, 108), (92, 100), (84, 92)]
+        );
+    }
+
+    #[test]
+    fn boundary_gain_maps_only_the_inner_reference_to_the_outer_base() {
+        let stats = |value: f64| BandStatistics {
+            mean: [value.ln(); 3],
+            dispersion: 0.0,
+            coverage: 1.0,
+        };
+        let observation =
+            boundary_gain_observation(stats(0.5), stats(0.5), stats(0.25), stats(0.25)).unwrap();
+        let corrected = apply_log_gain([0.25; 3], observation.gain);
+        for channel in corrected {
+            assert!((channel - 0.5).abs() < 1.0e-12);
+        }
+    }
+
+    #[test]
+    fn unequal_structural_extents_share_one_continuous_center_gain() {
+        let center = center_gain_profile(&[[1.0; 3]], &[[3.0; 3]], &[100.0], &[300.0]);
+        assert_eq!(center, vec![[1.5; 3]]);
     }
 }

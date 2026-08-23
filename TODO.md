@@ -33,7 +33,8 @@
 - [x] Register landscape and portrait shifted-overlap renders without resizing.
 - [x] Find smooth low-difference stitch curves independently on all four sides.
 - [x] Add the configuration-free `strucfix` raised-cosine structural compositor.
-- [x] Decouple distant light-match anchors from the compact visible alpha cross.
+- [x] Restore unrestricted irregular structural boundaries without a local alpha cap.
+- [x] Match each inner reference to the canonical outer base without altering the base.
 - [x] Preserve base alpha, exact white, metadata, depth, and compression class in `strucfix`.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.

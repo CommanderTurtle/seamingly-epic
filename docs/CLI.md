@@ -80,12 +80,13 @@ must be even and fit when centered on its supplied seam. No registration or
 resizing fallback exists. An existing output is refused unless `--overwrite`
 is supplied.
 
-The command has no feather-width control. Distant matches are used only to
-retain the cross render's light balance at the seam. A separate nearest-
-agreement walk derives the visible alpha support automatically. For the
-standard 4096-pixel cross short axis, that support can never extend more than
-256 pixels from the seam and will end sooner wherever the reference and base
-already agree. Pixels outside it come directly from `--in`.
+The command has no feather-width control. Its structural search retains the
+full usable cross depth; on the standard 4096-pixel short axis, an irregular
+boundary can be selected as far as 2015 pixels from the original seam. At that
+boundary, canonical near/far analysis maps only the inner reference's lighting
+to the outer `--in` image. The base is read-only: pixels outside the dynamic
+alpha wave come directly from `--in`, and its RGB is never corrected by
+`strucfix`.
 
 `raw-f32` is the machine interface used by the ComfyUI IMAGE node. It consumes
 a JSON descriptor for little-endian, contiguous `[B,H,W,C]` float32 files. It is

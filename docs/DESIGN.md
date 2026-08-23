@@ -135,27 +135,30 @@ Registration is analytic rather than estimated. The short axis of each cross
 is centered on the supplied seam; its long axis must equal the corresponding
 base dimension. Samples are never scaled or warped.
 
-Each of the four sides has two independently derived distances. The original
-far search evaluates corresponding base/reference pixels between one quarter
-of the available half-strip and its outer edge. Its cost combines log-linear
-RGB difference with a larger-weight local-gradient difference. Its selected
-correspondence is used **only** to estimate a robust light-balance gain, which
-is smoothed along the tangent and interpolated inward. This preserves the
-working color match at the literal seam without making a broad reference band.
+On each of the four sides, the engine searches corresponding base/reference
+pixels from one quarter of the available half-strip to its physical outer
+margin. The cost combines log-linear RGB difference with a larger-weight local
+gradient difference. Per-scanline global minima are median-filtered and
+smoothed into unrestricted irregular boundaries. The standard 2048-pixel
+half-strip can select through distance 2015; there is no short-distance alpha
+cap.
 
-A separate local walk begins 3–8 pixels from the seam, depending on cross size,
-and is capped at one eighth of the available half-strip. It selects the first
-stable base/reference agreement rather than a later global minimum. These raw
-distances are median-filtered and smoothed tangentially into the visible support
-curves. With the standard 2048-pixel half-strip, light matching still uses the
-512–2015 range while alpha support is confined to 3–256 pixels and ordinarily
-ends earlier.
+Each selected boundary is then treated as a one-sided photometric join. Two
+eight-pixel bands from the outer canonical base and two from the inner
+reference are extrapolated to the boundary, exactly following the canonical
+near/far log-linear measurement. The resulting full gain maps the reference to
+the base; no reciprocal gain is ever applied to the base. Boundary observations
+are Huber-stabilized around a robust global estimate and low-pass filtered along
+the complete tangent. Because all three inputs have already received their own
+canonical seam correction, the profile is intentionally not split at the
+orthogonal centerline. Opposing boundary gains interpolate to one continuous
+center gain, preserving the reference's structure while preventing visible
+lighting bands.
 
-The reference is full strength at the original join and decays with a raised
-cosine to exact zero at the local support curve. Its derivative is zero at both
-locations. The base is therefore exact everywhere outside the narrow cross;
-distant match samples never paint pixels. Portrait and landscape masks form a
-probabilistic union; the
+The matched reference is full strength at the original join and decays with a
+raised cosine to exact zero at the irregular structural boundary. Its derivative
+is zero at both locations. The base is therefore exact everywhere outside the
+cross. Portrait and landscape masks form a probabilistic union; the
 union's reference share is divided with orthogonal-seam-aware axis weights.
 The portrait dominates the vertical join as the landscape's own vertical tile
 boundary is approached, and vice versa. A small symmetric floor makes the

@@ -185,10 +185,11 @@ The project provides three complementary repairs:
   midpoint-anchored waves without blurring, resizing, denoising, or
   regenerating the source.
 - **Registered Cross Structural Fix** consumes the landscape and portrait
-  overlap renders from shifted PiD crops. Distant correspondence samples retain
-  the proven seam-center light match, while four independent nearest-agreement
-  curves limit the visible raised-cosine layer to a narrow cross. Both
-  references retain orthogonal-seam-aware weighting at their central overlap.
+  overlap renders from shifted PiD crops. Four unrestricted structural-match
+  curves define an irregular cross. At each curve, canonical near/far bands
+  match only the inner reference to the outer corrected base before a
+  raised-cosine alpha wave is applied. Both references retain
+  orthogonal-seam-aware weighting at their central overlap.
   This is the automatic path for fingers, edges, and other geometry that was
   generated differently on opposite sides of the original four-tile join.
 - **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
@@ -313,42 +314,46 @@ portrait / --ycross:
   (512,0,1024,1024) + (512,1024,1024,1024) -> 4096x8192
 ```
 
-The structural and photometric decisions are deliberately separate. For every
-output row or column, the original distant search still finds a reliable
-base/reference correspondence and derives the same robust log-RGB light match
-that made the center seam successful. Those samples are invisible anchors;
-they no longer determine how far reference pixels are painted into the image.
+For every output row, the portrait path searches left and right for the lowest
+base/reference structural difference. For every column, the landscape path
+does the same above and below. Robust median and low-pass passes turn those
+per-scanline positions into the four smooth, irregular boundaries shown in the
+design diagram. The successful deep search is retained: for a standard
+2048-pixel half-strip it can extend from 512 through 2015 pixels. There is no
+256-pixel local-support cap; only the physical reference extent and safe
+analysis margin limit the selected boundary.
 
-A second walk starts immediately beside the join and selects the **nearest
-stable agreement** between corresponding base/reference structure. Robust
-tangential smoothing turns those results into four compact support curves. For
-a standard 4096-pixel cross short axis, the photometric anchor search remains
-512–2015 pixels from the join, while visible support starts at 3 pixels and is
-hard-contained within 256 pixels. It normally terminates much earlier when the
-two renders agree. No width or threshold is exposed to the user.
+Color is solved only after structure chooses that boundary. Four eight-pixel
+log-linear bands are measured there: outer-far and outer-near come from the
+already-corrected base, while inner-near and inner-far come from the alternate
+reference. Both sides are extrapolated to the boundary using the same
+near/far method as the canonical correction. Their difference is a one-sided
+gain applied **only to the inner reference**. The base never receives this
+correction. Huber stabilization and a continuous 96-pixel tangential low-pass
+remove outlier stripes without filtering source pixels or splitting the gain
+profile at the already-corrected quadrant join.
 
-If `d` is normal distance from the original join and `S(t)` is the local
-support distance at along-seam position `t`, the reference weight is
+If `d` is normal distance from the original join and `D(t)` is the selected
+structural-boundary distance at along-seam position `t`, the reference weight is
 
 $$
 \alpha(d,t)=
 \begin{cases}
-\tfrac12[1+\cos(\pi d/S(t))],&0\le d<S(t),\\
-0,&d\ge S(t).
+\tfrac12[1+\cos(\pi d/D(t))],&0\le d<D(t),\\
+0,&d\ge D(t).
 \end{cases}
 $$
 
-Thus the overlap render remains exactly as authoritative at the original seam
-as in the previous implementation, but the corrected base becomes completely
-authoritative at and beyond the nearest-agreement support. Both value and first
-derivative meet smoothly. At the central overlap, vertical and horizontal
-evidence use the smooth union
+Thus the matched overlap render is opaque at the original structural seam and
+approaches exact transparency at its irregular boundary. The corrected base is
+completely authoritative at and beyond that boundary, and its RGB is never
+modified by `strucfix`. Both value and first derivative meet smoothly. At the
+central overlap, vertical and horizontal evidence use the smooth union
 `1-(1-alpha_x)(1-alpha_y)`. Inside that union, each reference is down-weighted
 as its own orthogonal PiD join is approached; the exact center is shared
-symmetrically. No rectangular paste boundary is created. Outside this compact
-alpha cross, the corrected base samples remain byte-for-byte unchanged. The
-four `*_stitch` ranges in the JSON report now describe visible alpha support,
-not the distant light-balance anchors.
+symmetrically. No rectangular paste boundary is created. Outside the irregular
+cross, the corrected base samples remain byte-for-byte unchanged. The four
+`*_stitch` ranges in the JSON report describe those structural boundaries.
 
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
