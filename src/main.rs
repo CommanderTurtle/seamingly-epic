@@ -13,7 +13,7 @@ use seamingly_epic::{
     version,
     arg_required_else_help = true,
     about = "Correct straight photometric boundaries between independently refined image tiles",
-    long_about = "Bounded-memory, lossless-PNG seam analysis and correction. The engine changes only a smooth exposure/white-balance field; it never resamples or spatially filters source detail."
+    long_about = "Full-resolution f64, lossless-PNG seam analysis and correction. The engine changes only a smooth exposure/white-balance field; it never resamples or spatially filters source detail."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -126,7 +126,7 @@ struct Settings {
     /// Sample every Nth pixel along a boundary; one walks every row/column.
     #[arg(long, default_value_t = 1)]
     sample_stride: u32,
-    /// Width of the raised-cosine local residual ramp.
+    /// Width of the raised-cosine exact-boundary closure ramp.
     #[arg(long, default_value_t = 192)]
     blend_width: u32,
     /// Low-pass radius along a residual profile (source pixels are never blurred).
@@ -135,7 +135,7 @@ struct Settings {
     /// Global correction multiplier.
     #[arg(long, default_value_t = 1.0)]
     strength: f64,
-    /// Local residual correction multiplier.
+    /// Full-resolution residual-field and exact-closure multiplier.
     #[arg(long, default_value_t = 1.0)]
     local_strength: f64,
     /// Per-channel correction limit in photographic stops.

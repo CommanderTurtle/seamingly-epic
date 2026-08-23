@@ -7,11 +7,13 @@ independently refined image tiles. It targets the exact case where four
 
 ## The whole method
 
-Tiles are nodes, shared boundaries are sparse connections, and successive
-Laplacian iterations expand the effective receptive field until distant tiles
-participate in the global solution—while retaining higher-resolution local
-seam profiles. It is much like sparse attention for an image grid, except the
-result is a deterministic graph optimization rather than a learned model.
+Tiles are nodes and shared boundaries are sparse connections. That small graph
+establishes a globally consistent exposure/white-balance gauge. Pixels then
+become the nodes of a second graph: every measured seam sample is injected as
+a desired edge gradient, and one full-resolution `f64` inverse-Laplacian solve
+turns all of those measurements into a single image-wide correction cloud. It
+is much like sparse attention for an image grid, except the result is an exact,
+deterministic graph optimization rather than a learned model.
 
 The ordinary zero-configuration invocation is therefore only:
 
@@ -85,51 +87,99 @@ another through every real path and cycle in the connected tile graph. No
 fictional diagonal or distant pixel comparison is introduced. Storage and
 each graph iteration remain $O(|V|+|E|)$.
 
-The graph solve handles the globally consistent part of the correction. The
-remaining position-varying mismatch stays attached to the boundary that
-actually measured it. For output pixel $p$, tile $\tau(p)$, nearby measured
-edges $\mathcal N(\tau(p))$, along-edge coordinate $t_e(p)$, signed half-split
-$s_e(p)\in\{-\tfrac12,+\tfrac12\}$, residual profile $\mathbf r_e$, and
-raised-cosine support $\phi_e$, the complete per-pixel log correction is
+The tile solve handles the globally consistent constant part. It leaves a
+position-varying residual profile $\mathbf r_e(t)$ at each accepted seam. Now
+let $G_\Omega=(\Omega,E_\Omega)$ be the four-neighbor graph of **every output
+pixel**, and let $D$ be its oriented incidence matrix. A desired correction
+gradient $\mathbf v_{pq}$ is zero on ordinary pixel edges and equals the
+negative measured residual on the edge that crosses a seam. The dense field is
+the zero-mean gradient-domain solution
 
 $$
-\mathbf c(p)=\mathbf g_{\tau(p)}+
-\sum_{e\in\mathcal N(\tau(p))}
-s_e(p)\,\phi_e(p)\,\mathbf r_e\!\left(t_e(p)\right),
+\mathbf h^\star=
+\underset{\sum_{p\in\Omega}\mathbf h(p)=\mathbf 0}
+{\operatorname{arg\,min}}
+\sum_{(p,q)\in E_\Omega}
+\left\|\left(\mathbf h(q)-\mathbf h(p)\right)-
+\mathbf v_{pq}\right\|_2^2,
 $$
 
-where, for normal distance $n_e(p)$ and feather half-width $h_e$,
+or equivalently
 
 $$
-\phi_e(p)=
+L_\Omega\mathbf h=D^{\mathsf T}\mathbf v,
+\qquad
+L_\Omega=D^{\mathsf T}D,
+\qquad
+\mathbf h=L_\Omega^{+}D^{\mathsf T}\mathbf v.
+$$
+
+This is the literal ghost-map construction. By linearity, if $a$ enumerates
+the accepted per-position seam impulses,
+
+$$
+\mathbf h=
+\sum_a L_\Omega^{+}D^{\mathsf T}\mathbf e_a\,\mathbf v_a.
+$$
+
+Each summand is the conceptual full-image ghost field caused by one seam
+observation. The implementation does not allocate thousands of duplicate
+images; it superposes them exactly in spectral space and stores their single
+sum. For an 8x12 layout, the sparse measurements therefore induce all
+$96^2=9216$ ordered tile relationships while the actual solve remains over the
+real pixel graph. Tile 1 and tile 96 influence one another through every
+intervening path without falsely asserting that two unrelated scene pixels
+must have the same color.
+
+With zero-flux outer boundaries, the rectangular pixel Laplacian is exactly
+diagonalized by a two-dimensional DCT-II. Its eigenvalues are
+
+$$
+\lambda_{k\ell}=
+4\sin^2\!\left(\frac{\pi k}{2W}\right)+
+4\sin^2\!\left(\frac{\pi \ell}{2H}\right).
+$$
+
+The DC coefficient is set to zero to fix the otherwise arbitrary common
+exposure. DCT-III reconstructs one independent `f64` value per pixel and RGB
+channel. A small raised-cosine closure field then supplies only the
+non-integrable remainder at the exact two samples straddling each seam. For
+normal distance $n$ and width $w$, its support is
+
+$$
+\phi(n)=
 \begin{cases}
-\tfrac12\!\left[1+\cos\!\left(\pi |n_e(p)|/h_e\right)\right],
-& |n_e(p)|<h_e,\\[4pt]
-0, & |n_e(p)|\ge h_e.
+\tfrac12[1+\cos(\pi|n|/w)],&|n|<w,\\
+0,&|n|\ge w.
 \end{cases}
 $$
 
-The source is then changed only photometrically in linear light:
+For tile $\tau(p)$, global field $\mathbf h$, closure field $\boldsymbol\ell$,
+and a common highlight-preserving gauge $a$, the final correction is
 
 $$
+\mathbf c(p)=\mathbf g_{\tau(p)}+\mathbf h(p)+
+\boldsymbol\ell(p)+a\mathbf 1,
+\qquad
 \mathbf I_{\mathrm{out}}(p)=
-\exp\!\left(\log\mathbf I_{\mathrm{in}}(p)+\mathbf c(p)\right).
+\mathbf I_{\mathrm{in}}(p)\odot\exp(\mathbf c(p)).
 $$
 
-This per-pixel field is the two-dimensional **smokemap**: a continuous map
-derived from every accepted scanline and every globally related tile. The
-correction field is smoothed; the image is never blurred, resampled, denoised,
-or regenerated. Local seam evidence remains local because broadcasting it to
-a distant tile would invent a measurement, while the Laplacian gain solve
-already carries the valid all-depth relationship.
+That correction field is the two-dimensional **smokemap**. Only its values are
+reconstructed. Source samples are never convolved with neighbors, resampled,
+blurred, sharpened, denoised, regenerated, or passed through a lower-precision
+image. If the predicted correction would exceed the encoding ceiling, the
+single common gauge $a\le0$ shifts all channels equally; this preserves the
+solved color relationships and avoids destructive per-channel highlight
+clipping.
 
-Boundary segments and output rows run in parallel with Rayon. `threads=0`
-uses the platform pool (normally every available logical CPU), decoded PNG data
-is held in a bounded memory-mapped backing file, and only inherently sequential
-PNG decode/encode stages stay serial. The sparse graph solve is tiny beside the
-pixel pass. A GPU is intentionally unnecessary: transferring this deterministic
-element-wise correction through CUDA would not improve its mathematics, color
-fidelity, or output quality.
+Boundary analysis, DCT rows and columns, transposes, correction-field storage,
+headroom inspection, and output rows run in parallel with Rayon. `threads=0`
+uses the platform pool (normally every available logical CPU). RustDCT uses
+RustFFT's native SIMD-capable kernels, while decoded source pixels and the final
+three-plane field live in temporary memory maps. Only PNG decode/encode remains
+inherently sequential. No GPU runtime, model, tensor conversion, or reduced
+precision is introduced.
 
 The project provides two complementary repairs:
 
@@ -169,7 +219,7 @@ Restart ComfyUI. The nodes appear under `image / seamingly epic`:
 
 - **Seamingly Epic — Native IMAGE**: float32 in/out, correction-area mask, and
   JSON diagnostics. Use it inside an ordinary workflow.
-- **Seamingly Epic — Streaming PNG**: bounded-memory
+- **Seamingly Epic — Streaming PNG**: memory-mapped
   RGB24/RGBA32/RGB48/RGBA64 PNG path. Use it for 8K/16K images that should not
   become another full Comfy tensor.
 - **Seamingly Epic — Reference Repair**: the tutorial's painted-reference
@@ -249,10 +299,15 @@ requirements, and supported PNG formats.
 
 - PNG output remains losslessly encoded at the source per-channel depth:
   RGB24/RGBA32 use 8-bit channels; RGB48/RGBA64 use 16-bit channels.
-- Explicit alpha samples are copied byte-for-byte.
+- All analysis and correction-field arithmetic is `f64`; a 16-bit source is
+  never routed through an 8-bit or float32 image, palette, or intermediate
+  codec. The Comfy path returns float32 only because its source `IMAGE` is
+  already float32.
+- Explicit alpha samples are copied byte-for-byte; RGB hidden behind effectively
+  transparent alpha is also left untouched.
 - Standard color, text, EXIF, ICC, and ComfyUI workflow/prompt metadata exposed
   by the PNG codec are retained.
-- Source geometry and spatial detail are never filtered or resampled.
+- Source geometry and spatial detail are never filtered, mixed, or resampled.
 
 Correction necessarily changes RGB values. Here, "lossless" means no lossy
 codec or detail-destroying spatial operation—not byte-identical color samples.
@@ -270,15 +325,16 @@ The repository's non-Comfy checks are:
 
 ```bash
 cargo fmt --all --check
-cargo test --all-targets
+cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo audit
 python -m compileall -q __init__.py nodes.py runtime.py
 cargo build --release --locked
 ```
 
-These checks validate the native implementation, Rust advisory graph, and
-Python syntax. There is no project-owned Python dependency graph to audit:
+These checks validate the native implementation's complete build graph, Rust
+advisory graph, and Python syntax without inventing a synthetic photographic
+quality test. There is no project-owned Python dependency graph to audit:
 ComfyUI supplies Python, PyTorch, and NumPy. A real ComfyUI launch remains the
 final environment-specific confirmation because the custom nodes intentionally
 depend on ComfyUI's own runtime.

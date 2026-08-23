@@ -87,8 +87,9 @@ class SeaminglyEpicImage:
     FUNCTION = "correct"
     CATEGORY = CATEGORY
     DESCRIPTION = (
-        "Automatic exposure/white-balance seam correction. Uses float32 transport, "
-        "does not blur or resample source detail, and returns the full confidence report."
+        "Automatic full-resolution f64 exposure/white-balance field reconstruction. "
+        "Uses float32 Comfy transport, does not blur or resample source detail, and "
+        "returns the full confidence report."
     )
 
     def correct(self, image: torch.Tensor, **arguments):
@@ -173,9 +174,9 @@ class SeaminglyEpicFile:
     FUNCTION = "correct"
     CATEGORY = CATEGORY
     DESCRIPTION = (
-        "Bounded-memory RGB24/RGBA32/RGB48/RGBA64 PNG path for 8K and 16K "
-        "images. The image never becomes a Comfy tensor; recognized PNG "
-        "metadata and alpha are preserved."
+        "Memory-mapped RGB24/RGBA32/RGB48/RGBA64 PNG path with a global f64 "
+        "correction field for 8K and 16K images. The image never becomes a "
+        "Comfy tensor; recognized PNG metadata and alpha are preserved."
     )
 
     def correct(self, image: str, output_prefix: str, **arguments):

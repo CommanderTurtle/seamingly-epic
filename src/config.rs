@@ -46,13 +46,13 @@ pub struct CorrectionConfig {
     pub refine_radius: u32,
     /// Sample every Nth pixel along a boundary. One performs a complete scanline walk.
     pub sample_stride: u32,
-    /// Width over which the optional local residual field fades to zero.
+    /// Width over which the exact-boundary closure field fades to zero.
     pub blend_width: u32,
     /// Radius of low-pass smoothing along the seam profile.
     pub profile_smooth_radius: u32,
     /// Overall correction multiplier.
     pub strength: f64,
-    /// Local profile correction multiplier after global tile normalization.
+    /// Full-resolution profile reconstruction and closure multiplier.
     pub local_strength: f64,
     /// Maximum absolute per-channel gain, expressed in photographic stops.
     pub max_gain_stops: f64,

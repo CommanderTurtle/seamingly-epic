@@ -319,9 +319,10 @@ pub(crate) fn build_model<S: PixelSource>(
     let mut gains = if graph_connected {
         solve_tile_gains(layout.tile_count(), &constraints)?
     } else {
-        // Applying a component-wide gain when its neighboring boundary was
-        // rejected could create a new seam. Disconnected analyses therefore
-        // use only the bounded local residual field around accepted joins.
+        // Applying a component-wide constant gain when its neighboring
+        // boundary was rejected could create a new seam. Disconnected
+        // analyses therefore leave the coarse gauge neutral; accepted
+        // per-position evidence is still reconstructed by the pixel solve.
         vec![[0.0; 3]; layout.tile_count()]
     };
     limit_gains(&mut gains, config.strength, config.max_gain_stops);

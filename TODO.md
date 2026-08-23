@@ -15,14 +15,18 @@
 - [x] Propagate every connected constraint through all adjacency depths with a sparse graph solve.
 - [x] Prevent disconnected constraint graphs from creating new tile boundaries.
 - [x] Add confidence gating, correction limits, and a report-only mode.
-- [x] Add smooth local residual correction without spatially filtering image detail.
+- [x] Add smooth exact-boundary residual closure without filtering image detail.
 - [x] Scanwalk every boundary position and verify a non-uniform per-pixel field.
+- [x] Reconstruct every seam impulse through the full pixel-grid inverse Laplacian.
+- [x] Store the global three-channel correction cloud in lossless `f64` planes.
+- [x] Close the exact seam samples after projecting non-integrable X/Y constraints.
+- [x] Preserve highlight headroom with one common RGB gauge rather than channel clipping.
 - [x] Verify all 17 adjacencies in a 12-tile 3x4 grid.
-- [x] Parallelize analysis/application while keeping PNG encoding bounded in memory.
+- [x] Parallelize analysis, DCT passes, transposes, field writes, and application.
 - [x] Implement a float32 raw transport for a zero-quantization ComfyUI IMAGE node.
 - [x] Implement a streaming file node for images too large to return as a Comfy tensor.
 - [x] Condense the cited manual reference-mask workflow into one ComfyUI node.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
-- [x] Run final formatting, compilation, Clippy, Python compilation, and dependency audit.
+- [ ] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.
 - [x] Finish focused Git commits and leave the tree clean.

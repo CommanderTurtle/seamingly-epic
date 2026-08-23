@@ -50,20 +50,22 @@ model-free color transform can repair incompatible objects or geometry.
 - Burt and Adelson, [A Multiresolution Spline With Application to Image Mosaics](https://persci.mit.edu/pub_pdfs/spline83.pdf), 1983. Frequency-dependent transition widths motivate changing only the low-frequency photometric field rather than blurring detail at the boundary.
 - Perez, Gangnet, and Blake, [Poisson Image Editing](https://legacy.sites.fas.harvard.edu/~cs278/papers/poisson.pdf), 2003. Gradient-domain constraints motivate preserving local gradients while correcting boundary conditions.
 - Levin et al., [Seamless Image Stitching in the Gradient Domain](https://people.csail.mit.edu/alevin/papers/eccv04-blending.pdf), 2004. A seam is usefully measured as a new gradient not supported by either side.
+- Kazhdan et al., [Distributed Gradient-Domain Processing of Planar and Spherical Images](https://www.cs.jhu.edu/~misha/MyPapers/ToG10.pdf), 2010. Large stitched images can reconcile values and gradients through a global Poisson system while retaining a cache-aware, parallel implementation.
+- Bhat et al., [Fourier Analysis of the 2D Screened Poisson Equation for Gradient Domain Problems](https://grail.cs.washington.edu/projects/screenedPoissonEq/), 2008. Rectangular Neumann problems admit direct cosine-transform solutions rather than an approximate iteration over the full pixel grid.
+- [RustDCT](https://docs.rs/rustdct/latest/rustdct/) and [RustFFT](https://docs.rs/rustfft/latest/rustfft/) provide the native DCT-II/III and SIMD-capable FFT kernels used by the full-resolution reconstruction.
 - OpenCV's `BlocksChannelsCompensator` documents the established practice of estimating spatially varying per-channel exposure compensation for stitched imagery.
 - Current ComfyUI custom-node documentation defines `IMAGE` as a float tensor of shape `[B,H,W,C]`; the native node therefore uses a float32 file transport rather than quantizing through an 8-bit PNG.
 
 ## Engineering conclusion
 
 For a persistent straight white-balance boundary, a learned model is unnecessary
-and potentially destructive. The production path is a robust, bounded-memory
-Rust scanner with:
+and potentially destructive. The production path is a robust Rust scanner with:
 
 - explicit or grid-derived candidate lines;
 - robust extrapolation from both sides of each boundary;
 - log-linear RGB gain estimates;
 - a global least-squares solve over the tile adjacency graph;
-- smooth, confidence-gated residual fields near each seam;
+- a direct full-resolution Neumann Poisson reconstruction in `f64`;
+- exact local closure for non-integrable residuals at seam crossings;
 - exact preservation of alpha and untouched spatial detail;
 - lossless PNG output with source metadata retained.
-

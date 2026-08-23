@@ -14,19 +14,20 @@ have been concatenated. For the standard 8192x8192 result:
    unchanged.
 
 The default `sample_stride=1` scanwalks every Y position on vertical segments
-and every X position on horizontal segments. The native engine then evaluates
-the combined global and position-varying correction field for every output
-pixel.
+and every X position on horizontal segments. A full-resolution `f64` Neumann
+Poisson solve superposes every accepted sample into one global correction
+field, and the native engine evaluates that field for every output pixel.
 
 The IMAGE path writes the tensor as little-endian float32, invokes the Rust
 engine without a shell, and reads float32 back. It never quantizes through an
 8-bit interchange image. ComfyUI still holds the input and output tensors, so
 this path is convenient rather than memory-minimal.
 
-The correction-area MASK is diagnostic: brightness is the accepted boundary
-confidence multiplied by the same raised-cosine spatial support used by the
-engine. Confidence gates unreliable segments; it does not attenuate an accepted
-residual and knowingly leave part of it behind.
+The correction-area MASK is an **evidence/closure diagnostic**, not the support
+of the global field (which is image-wide). Brightness is accepted boundary
+confidence multiplied by the raised-cosine support of the exact residual
+closure term. Confidence gates unreliable segments; it does not attenuate an
+accepted residual and knowingly leave part of it behind.
 
 ## Streaming PNG
 
@@ -40,8 +41,9 @@ ComfyUI's input directory.
    absolute path plus the JSON report.
 
 The node never creates an `IMAGE` tensor. Its preview refers to the completed
-output file, while decoding, correction, and encoding stay bounded in the Rust
-process.
+output file. Source decoding and the completed `f64` field use temporary memory
+maps; the spectral solve uses two full-resolution `f64` work planes for one
+color channel at a time. See the exact storage figures in `docs/CLI.md`.
 
 ## Reference Repair
 
@@ -87,7 +89,7 @@ Two optional environment variables are available:
 
 ```text
 SEAMINGLY_EPIC_BIN   absolute path to a different native binary
-SEAMINGLY_EPIC_TEMP  scratch directory for IMAGE float32 transport
+SEAMINGLY_EPIC_TEMP  scratch root for source staging, f64 fields, and IMAGE transport
 ```
 
 The nodes do not launch a server, bind a port, contact the internet, or retain
