@@ -3,7 +3,7 @@ name = "seamingly-epic"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Bounded-memory photometric seam correction for independently refined image tiles"
+description = "Full-resolution f64 photometric seam correction for independently refined image tiles"
 
 [lib]
 name = "seamingly_epic"

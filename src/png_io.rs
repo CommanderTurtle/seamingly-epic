@@ -169,11 +169,23 @@ impl PngStage {
                 .enumerate()
                 .for_each(|(y, row)| {
                     for x in 0..width as usize {
+                        let pixel_offset = x * channels * bytes_per_sample;
+                        if has_alpha(color_type) {
+                            let alpha = read_sample(
+                                row,
+                                pixel_offset + (channels - 1) * bytes_per_sample,
+                                bit_depth,
+                            );
+                            if alpha <= 1.0 / 255.0 {
+                                // Preserve hidden RGB as well as alpha. Analysis
+                                // excludes the same effectively transparent samples.
+                                continue;
+                            }
+                        }
                         let gain = model.log_gain_at(x as u32, y as u32);
                         if gain.iter().all(|value| value.abs() < 1.0e-15) {
                             continue;
                         }
-                        let pixel_offset = x * channels * bytes_per_sample;
                         match color_type {
                             ColorType::Grayscale | ColorType::GrayscaleAlpha => {
                                 let encoded = read_sample(row, pixel_offset, bit_depth);

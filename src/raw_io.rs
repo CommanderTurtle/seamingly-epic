@@ -247,11 +247,15 @@ fn apply_raw(
             .enumerate()
             .for_each(|(y, row)| {
                 for x in 0..width as usize {
+                    let sample = x * channels;
+                    if channels == 4 && read_f32(row, sample + 3) <= 1.0 / 255.0 {
+                        // Preserve RGB hidden behind effectively transparent alpha.
+                        continue;
+                    }
                     let gain = model.log_gain_at(x as u32, y as u32);
                     if gain.iter().all(|value| value.abs() < 1.0e-15) {
                         continue;
                     }
-                    let sample = x * channels;
                     let linear = [
                         decode_sample(f64::from(read_f32(row, sample)), config.transfer),
                         decode_sample(f64::from(read_f32(row, sample + 1)), config.transfer),

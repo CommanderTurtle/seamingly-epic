@@ -59,7 +59,7 @@ pub struct FieldReport {
     pub output_pixels: u64,
     /// Temporary storage occupied by the three f64 correction planes.
     pub stored_field_bytes: u64,
-    /// Common exposure gauge applied to retain the source highlight ceiling.
+    /// Common exposure gauge applied to avoid clipping at the encoding ceiling.
     pub headroom_shift_stops: f64,
 }
 
