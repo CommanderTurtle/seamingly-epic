@@ -1,13 +1,13 @@
 use std::{
     borrow::Cow,
     fs::{self, File},
-    io::{BufReader, BufWriter, Write},
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use memmap2::{MmapMut, MmapOptions};
-use png::{BitDepth, ColorType, Compression, Info};
+use png::{BitDepth, ColorType, DeflateCompression, Filter, Info};
 use rayon::prelude::*;
 use tempfile::NamedTempFile;
 
@@ -66,9 +66,11 @@ pub fn correct_png(
         };
         build_model(&view, config, stage.image_report())?
     };
-    if model.report.applied {
-        stage.apply(&model, config)?;
+    if !model.report.applied {
+        copy_png_verbatim(input, output, overwrite)?;
+        return Ok(model.report);
     }
+    stage.apply(&model, config)?;
     stage.encode(output, overwrite)?;
     Ok(model.report)
 }
@@ -80,10 +82,12 @@ struct PngStage {
     row_bytes: usize,
     channels: usize,
     bytes_per_sample: usize,
+    source_deflate_level: u8,
 }
 
 impl PngStage {
     fn decode(path: &Path) -> Result<Self> {
+        let source_deflate_level = source_deflate_level(path)?;
         let input = File::open(path)
             .with_context(|| format!("could not open input PNG: {}", path.display()))?;
         let decoder = png::Decoder::new(BufReader::new(input));
@@ -142,6 +146,7 @@ impl PngStage {
             row_bytes,
             channels,
             bytes_per_sample,
+            source_deflate_level,
         })
     }
 
@@ -251,7 +256,12 @@ impl PngStage {
             let writer = BufWriter::new(temporary.as_file_mut());
             let mut encoder = png::Encoder::with_info(writer, self.info.clone())
                 .context("source PNG metadata cannot be represented by the encoder")?;
-            encoder.set_compression(Compression::Balanced);
+            // PNG does not record an encoder preset, but its zlib header does
+            // retain the four-level FLEVEL compression class.  Re-encode with
+            // the representative DEFLATE level for that source class instead
+            // of silently forcing every input through Balanced/level 6.
+            encoder.set_deflate_compression(DeflateCompression::Level(self.source_deflate_level));
+            encoder.set_filter(Filter::Adaptive);
             let mut png_writer = encoder
                 .write_header()
                 .context("could not write PNG header")?;
@@ -268,17 +278,111 @@ impl PngStage {
             .sync_all()
             .context("could not synchronize corrected PNG")?;
 
-        if overwrite && output.exists() {
-            fs::remove_file(output).with_context(|| {
-                format!("could not replace existing output: {}", output.display())
-            })?;
-        }
-        temporary
-            .persist(output)
-            .map_err(|error| error.error)
-            .with_context(|| format!("could not publish output PNG: {}", output.display()))?;
-        Ok(())
+        publish_temporary(temporary, output, overwrite)
     }
+}
+
+/// Infer a representative DEFLATE level from the source zlib FLEVEL class.
+///
+/// PNG does not serialize the encoder's literal 0-9 level.  The two FLEVEL
+/// bits are the only portable compression-strength signal retained in IDAT,
+/// mapping to fastest, fast, default, and maximum classes respectively.
+fn source_deflate_level(path: &Path) -> Result<u8> {
+    const SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    let mut input = BufReader::new(
+        File::open(path)
+            .with_context(|| format!("could not inspect input PNG: {}", path.display()))?,
+    );
+    let mut signature = [0_u8; 8];
+    input
+        .read_exact(&mut signature)
+        .context("could not read PNG signature while inspecting compression")?;
+    ensure!(
+        &signature == SIGNATURE,
+        "input does not have a PNG signature"
+    );
+
+    let mut zlib_header = [0_u8; 2];
+    let mut collected = 0_usize;
+    loop {
+        let mut chunk_header = [0_u8; 8];
+        input
+            .read_exact(&mut chunk_header)
+            .context("PNG ended before its first IDAT zlib header")?;
+        let length = u32::from_be_bytes(chunk_header[..4].try_into().unwrap()) as u64;
+        let chunk_type = &chunk_header[4..8];
+        if chunk_type == b"IDAT" && collected < zlib_header.len() {
+            let wanted = (zlib_header.len() - collected).min(length as usize);
+            input
+                .read_exact(&mut zlib_header[collected..collected + wanted])
+                .context("could not read source IDAT zlib header")?;
+            collected += wanted;
+            input
+                .seek(SeekFrom::Current((length - wanted as u64) as i64))
+                .context("could not skip source IDAT payload")?;
+        } else {
+            input
+                .seek(SeekFrom::Current(length as i64))
+                .context("could not skip PNG chunk while inspecting compression")?;
+        }
+        input
+            .seek(SeekFrom::Current(4))
+            .context("could not skip PNG chunk checksum")?;
+        if collected == zlib_header.len() {
+            break;
+        }
+        ensure!(chunk_type != b"IEND", "PNG contains no IDAT zlib header");
+    }
+
+    let [cmf, flg] = zlib_header;
+    ensure!(cmf & 0x0f == 8, "PNG IDAT does not use the DEFLATE method");
+    ensure!(cmf >> 4 <= 7, "PNG IDAT advertises an invalid zlib window");
+    ensure!(
+        (u16::from(cmf) * 256 + u16::from(flg)) % 31 == 0,
+        "PNG IDAT has an invalid zlib header check"
+    );
+    ensure!(
+        flg & 0x20 == 0,
+        "PNG IDAT unexpectedly requires a preset dictionary"
+    );
+    Ok(match flg >> 6 {
+        0 => 1,
+        1 => 3,
+        2 => 6,
+        3 => 9,
+        _ => unreachable!("FLEVEL is two bits"),
+    })
+}
+
+fn copy_png_verbatim(input: &Path, output: &Path, overwrite: bool) -> Result<()> {
+    let parent = absolute_parent(output)?;
+    fs::create_dir_all(&parent)
+        .with_context(|| format!("could not create output directory: {}", parent.display()))?;
+    let mut temporary = NamedTempFile::new_in(&parent)
+        .with_context(|| format!("could not create output beside {}", output.display()))?;
+    let mut source = BufReader::new(
+        File::open(input)
+            .with_context(|| format!("could not reopen input PNG: {}", input.display()))?,
+    );
+    std::io::copy(&mut source, temporary.as_file_mut())
+        .context("could not preserve unchanged PNG bytes")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("could not synchronize unchanged PNG")?;
+    publish_temporary(temporary, output, overwrite)
+}
+
+fn publish_temporary(temporary: NamedTempFile, output: &Path, overwrite: bool) -> Result<()> {
+    if overwrite && output.exists() {
+        fs::remove_file(output)
+            .with_context(|| format!("could not replace existing output: {}", output.display()))?;
+    }
+    temporary
+        .persist(output)
+        .map_err(|error| error.error)
+        .with_context(|| format!("could not publish output PNG: {}", output.display()))?;
+    Ok(())
 }
 
 // PixelSource must use the same transfer function as the requested analysis.
@@ -502,6 +606,7 @@ mod tests {
             let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
             encoder.set_color(ColorType::Rgba);
             encoder.set_depth(BitDepth::Eight);
+            encoder.set_compression(png::Compression::High);
             encoder
                 .add_text_chunk("workflow".to_owned(), "{\"nodes\":[]}".to_owned())
                 .unwrap();
@@ -531,6 +636,8 @@ mod tests {
         };
         let report = correct_png(&input, &output, &config, false).unwrap();
         assert!(report.applied);
+        assert_eq!(source_deflate_level(&input).unwrap(), 9);
+        assert_eq!(source_deflate_level(&output).unwrap(), 9);
 
         let file = File::open(&output).unwrap();
         let mut reader = png::Decoder::new(BufReader::new(file)).read_info().unwrap();
@@ -650,5 +757,50 @@ mod tests {
         .unwrap();
         assert_eq!(report.image.channels, 3);
         assert_eq!(report.image.bit_depth, "24-bit RGB (8 bits/channel)");
+    }
+
+    #[test]
+    fn copies_an_unchanged_png_byte_for_byte() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("unchanged.png");
+        let output = directory.path().join("unchanged-output.png");
+        let (width, height) = (32_u32, 16_u32);
+        let source = vec![117_u8; width as usize * height as usize * 3];
+        {
+            let file = File::create(&input).unwrap();
+            let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
+            encoder.set_color(ColorType::Rgb);
+            encoder.set_depth(BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            encoder
+                .add_text_chunk("provenance".to_owned(), "keep exactly".to_owned())
+                .unwrap();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&source)
+                .unwrap();
+        }
+        let report = correct_png(
+            &input,
+            &output,
+            &CorrectionConfig {
+                seams: SeamSpec {
+                    grid: Some(GridSpec {
+                        columns: 2,
+                        rows: 1,
+                    }),
+                    ..SeamSpec::default()
+                },
+                scan_radius: 3,
+                sample_stride: 1,
+                transfer: TransferFunction::Linear,
+                ..CorrectionConfig::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert!(!report.applied);
+        assert_eq!(fs::read(&input).unwrap(), fs::read(&output).unwrap());
     }
 }
