@@ -1,0 +1,11 @@
+/target/
+/.research/
+/bin/
+*.profraw
+*.tmp
+*.raw
+__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+
