@@ -4,9 +4,8 @@ use anyhow::{Context, Result, ensure};
 use memmap2::{Mmap, MmapMut, MmapOptions};
 use rayon::prelude::*;
 use rustdct::{DctPlanner, TransformType2And3};
-use tempfile::tempfile;
 
-use crate::color::Rgb;
+use crate::{color::Rgb, scratch::temporary_file};
 
 /// A full-resolution, three-channel correction field backed by a temporary
 /// memory map. The planes are f64 because the field is the only transformed
@@ -64,7 +63,7 @@ impl GhostFieldBuilder {
         let total_bytes = plane_bytes
             .checked_mul(3)
             .context("RGB ghost field exceeds this platform's address space")?;
-        let file = tempfile().context("could not create temporary ghost-field store")?;
+        let file = temporary_file("ghost-field store")?;
         file.set_len(total_bytes as u64)
             .context("could not size temporary ghost-field store")?;
         let map = map_temporary_file(&file, total_bytes)?;

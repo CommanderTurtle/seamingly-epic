@@ -9,13 +9,14 @@ use anyhow::{Context, Result, bail, ensure};
 use memmap2::{MmapMut, MmapOptions};
 use png::{BitDepth, ColorType, Compression, Info};
 use rayon::prelude::*;
-use tempfile::{NamedTempFile, tempfile};
+use tempfile::NamedTempFile;
 
 use crate::{
     color::{Rgb, apply_log_gain, decode_sample, encode_sample},
     config::{CorrectionConfig, TransferFunction},
     engine::{CorrectionModel, PixelSource, build_model, with_threads},
     report::{CorrectionReport, ImageReport},
+    scratch::temporary_file,
 };
 
 pub fn analyze_png(input: impl AsRef<Path>, config: &CorrectionConfig) -> Result<CorrectionReport> {
@@ -99,7 +100,7 @@ impl PngStage {
         let total_bytes = row_bytes
             .checked_mul(height as usize)
             .context("decoded PNG size exceeds this platform's address space")?;
-        let file = tempfile().context("could not create temporary pixel store")?;
+        let file = temporary_file("pixel store")?;
         file.set_len(total_bytes as u64)
             .context("could not size temporary pixel store")?;
         let mut pixels = map_temporary_file(&file, total_bytes)?;

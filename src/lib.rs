@@ -9,6 +9,7 @@ pub mod png_io;
 pub mod raw_io;
 pub mod report;
 pub mod robust;
+mod scratch;
 pub mod solve;
 
 pub use config::{CorrectionConfig, GridSpec, SeamSpec};
