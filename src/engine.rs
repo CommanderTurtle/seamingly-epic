@@ -191,7 +191,15 @@ pub(crate) fn build_model<S: PixelSource>(
         })
         .collect();
 
-    let mut gains = solve_tile_gains(layout.tile_count(), &constraints)?;
+    let graph_connected = constraint_graph_connected(layout.tile_count(), &constraints);
+    let mut gains = if graph_connected {
+        solve_tile_gains(layout.tile_count(), &constraints)?
+    } else {
+        // Applying a component-wide gain when its neighboring boundary was
+        // rejected could create a new seam. Disconnected analyses therefore
+        // use only the bounded local residual field around accepted joins.
+        vec![[0.0; 3]; layout.tile_count()]
+    };
     limit_gains(&mut gains, config.strength, config.max_gain_stops);
 
     let mut vertical = vec![None; layout.x_seams.len() * layout.rows()];
@@ -237,6 +245,12 @@ pub(crate) fn build_model<S: PixelSource>(
             "Accepted {accepted} of {} boundary segments; rejected segments were left unchanged.",
             analyses.len()
         ));
+    }
+    if accepted > 0 && !graph_connected {
+        warnings.push(
+            "Accepted constraints do not connect every tile; global tile gains were disabled and only local seam ramps were applied."
+                .to_owned(),
+        );
     }
     if config.blend_width > 0 {
         let x_edges = layout.x_edges();
@@ -288,6 +302,29 @@ pub(crate) fn build_model<S: PixelSource>(
         horizontal,
         max_log_gain: config.max_gain_stops.max(0.0) * LN_2,
     })
+}
+
+fn constraint_graph_connected(tile_count: usize, constraints: &[GainConstraint]) -> bool {
+    if tile_count <= 1 {
+        return true;
+    }
+    let mut adjacency = vec![Vec::new(); tile_count];
+    for constraint in constraints.iter().filter(|item| item.weight > 0.0) {
+        adjacency[constraint.left_or_top].push(constraint.right_or_bottom);
+        adjacency[constraint.right_or_bottom].push(constraint.left_or_top);
+    }
+    let mut seen = vec![false; tile_count];
+    let mut stack = vec![0];
+    seen[0] = true;
+    while let Some(tile) = stack.pop() {
+        for neighbor in &adjacency[tile] {
+            if !seen[*neighbor] {
+                seen[*neighbor] = true;
+                stack.push(*neighbor);
+            }
+        }
+    }
+    seen.into_iter().all(|value| value)
 }
 
 fn validate_config(config: &CorrectionConfig) -> Result<()> {
