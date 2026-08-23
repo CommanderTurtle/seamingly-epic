@@ -14,7 +14,7 @@ between independently generated tiles cannot.
 ## Boundary model
 
 For each candidate seam, samples are taken in narrow strips on both sides.
-Pixels that are clipped, nearly black, highly textured, or inconsistent with a
+Pixels that are clipped, nearly black, transparent, highly textured, or inconsistent with a
 persistent line are down-weighted. Each side is robustly extrapolated to the
 boundary in log-linear RGB. A multiplicative exposure/white-balance jump becomes
 an additive three-channel offset:
@@ -30,8 +30,11 @@ gain[R] - gain[L] = -d
 ```
 
 All vertical and horizontal constraints are solved together, anchored so the
-weighted mean correction is zero. This avoids privileging one quadrant and
-prevents corrections from accumulating around a 2x2 grid cycle.
+mean correction is zero. This avoids privileging one quadrant and prevents
+corrections from accumulating around a 2x2 grid cycle. Global tile gains are
+used only when accepted constraints connect every tile. A disconnected graph
+falls back to bounded local correction so it cannot create a new join against
+an unmeasured neighbor.
 
 ## Residual field
 
@@ -52,3 +55,10 @@ The ComfyUI IMAGE node uses the same engine through a raw float32 descriptor.
 The separate file node is the preferred path for 16K images because returning an
 `IMAGE` tensor inherently asks ComfyUI to materialize the complete image.
 
+## Tutorial-derived reference repair
+
+The separate Reference Repair node intentionally does spatial work: it resizes
+the original image, grows/feathers a mask, applies explicit manual color
+controls, and composites that patch. This mirrors the cited workflow for
+semantic artifacts. It is not mixed into automatic normalization, and its
+detail-replacement behavior is visible and operator-controlled.
