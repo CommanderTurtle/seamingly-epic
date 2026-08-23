@@ -30,6 +30,10 @@
 - [x] Bundle focused compatibility nodes for every non-KJ tutorial dependency.
 - [x] Preserve the source PNG's zlib compression class instead of forcing Balanced.
 - [x] Copy a no-op PNG result byte-for-byte without re-encoding.
+- [x] Register landscape and portrait shifted-overlap renders without resizing.
+- [x] Find smooth low-difference stitch curves independently on all four sides.
+- [x] Add the configuration-free `strucfix` raised-cosine structural compositor.
+- [x] Preserve base alpha, exact white, metadata, depth, and compression class in `strucfix`.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
 - [x] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.

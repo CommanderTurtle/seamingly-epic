@@ -25,6 +25,24 @@ The ordinary zero-configuration invocation is therefore only:
 seamingly-epic --x 4096 --y 4096 --in myfile.png --out fixed.png
 ```
 
+When overlapping PiD renders are available, a second, independent structural
+pass can replace the incompatible object geometry that a photometric field
+cannot repair:
+
+```powershell
+.\target\release\seamingly-epic.exe strucfix `
+  --x 4096 --y 4096 `
+  --in "D:\output.png" --out "D:\outputfinal.png" `
+  --xcross "D:\landscape.png" --ycross "D:\portrait.png"
+```
+
+For the standard 8192x8192 result, `landscape.png` is the 8192x4096 render
+registered at `(0, 2048)`, and `portrait.png` is the 4096x8192 render registered
+at `(2048, 0)`. `--xcross` means that the reference spans the X axis; it repairs
+the horizontal `--y` join. `--ycross` spans the Y axis and repairs the vertical
+`--x` join. The command validates those dimensions and placements exactly and
+never guesses, resizes, or geometrically aligns a reference.
+
 Any number of comma-separated X and Y coordinates automatically defines the
 tiles and every true shared boundary. No grid dimensions, adjacency depth,
 sampling plan, or correction strength has to be supplied.
@@ -160,12 +178,19 @@ live in a temporary memory map; compact endpoint profiles remain in memory.
 Only PNG decode/encode is inherently sequential. No GPU runtime, model, tensor
 conversion, or reduced precision is introduced.
 
-The project provides two complementary repairs:
+The project provides three complementary repairs:
 
 - **Native photometric correction** measures persistent boundary steps in
   linear light, solves globally consistent seam-endpoint gauges, and applies
   midpoint-anchored waves without blurring, resizing, denoising, or
   regenerating the source.
+- **Registered Cross Structural Fix** consumes the landscape and portrait
+  overlap renders from shifted PiD crops. It finds four smooth low-difference
+  stitch curves, carries each canonical midline outward with a raised-cosine
+  mask, and combines both references with orthogonal-seam-aware weights at
+  their central overlap.
+  This is the automatic path for fingers, edges, and other geometry that was
+  generated differently on opposite sides of the original four-tile join.
 - **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
   [45-node tutorial graph](https://www.youtube.com/watch?v=V-ASlpPI87Y),
   including both painted Softfix and HardFix lanes. Focused compatibility
@@ -259,6 +284,63 @@ propagates those relationships through every adjacency depth, but its values
 exist only as seam endpoints—not constant edits to entire tiles. No waveform,
 adjacency-depth, or tile-count setting is exposed to the user.
 
+### Registered cross structural pass
+
+Run the ordinary photometric correction first, unchanged:
+
+```powershell
+.\target\release\seamingly-epic.exe --x 4096 --y 4096 `
+  --in "D:\file.png" --out "D:\output.png"
+```
+
+Then supply the two shifted overlap assemblies:
+
+```powershell
+.\target\release\seamingly-epic.exe strucfix `
+  --x 4096 --y 4096 `
+  --in "D:\output.png" --out "D:\outputfinal.png" `
+  --xcross "D:\landscape.png" --ycross "D:\portrait.png"
+```
+
+The standard references come from these four 1024-source-pixel crops before
+the same 1024-to-4096 PiD refinement:
+
+```text
+landscape / --xcross:
+  (0,512,1024,1024) + (1024,512,1024,1024) -> 8192x4096
+
+portrait / --ycross:
+  (512,0,1024,1024) + (512,1024,1024,1024) -> 4096x8192
+```
+
+For every output row, the portrait path searches left and right for the local
+minimum base/reference difference. For every column, the landscape path does
+the same above and below. The metric is dominated by differences between
+local log-linear RGB gradients, so structure matters more than a small
+exposure offset. Robust median and low-pass passes turn the raw minima into
+four smooth stitch curves. A local log-RGB gain matches each reference back to
+the corrected base at its selected curve.
+
+If `d` is normal distance from the original join and `D(t)` is the adaptive
+stitch distance at along-seam position `t`, the reference weight is
+
+$$
+\alpha(d,t)=
+\begin{cases}
+\tfrac12[1+\cos(\pi d/D(t))],&0\le d<D(t),\\
+0,&d\ge D(t).
+\end{cases}
+$$
+
+Thus the overlap render is authoritative at the original seam, the corrected
+base is authoritative at and beyond the chosen stitch, and both the value and
+first derivative meet smoothly. At the central overlap, vertical and
+horizontal evidence use the smooth union
+`1-(1-alpha_x)(1-alpha_y)`. Inside that union, each reference is down-weighted
+as its own orthogonal PiD join is approached; the exact center is shared
+symmetrically. No rectangular paste boundary is created. Outside the adaptive
+cross, the corrected base samples remain byte-for-byte unchanged.
+
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
 ```bash
@@ -301,7 +383,10 @@ requirements, and supported PNG formats.
   transparent alpha is also left untouched.
 - Standard color, text, EXIF, ICC, and ComfyUI workflow/prompt metadata exposed
   by the PNG codec are retained.
-- Source geometry and spatial detail are never filtered, mixed, or resampled.
+- The ordinary photometric path never filters, mixes, or resamples spatial
+  detail. `strucfix` intentionally mixes only same-coordinate samples from the
+  registered overlap renders; it still performs no resize, warp, convolution,
+  denoise, or lossy encode.
 - Every inferred normal wave is exactly zero at its tile midpoint, there is no
   image-wide exposure shift, and exact source-white channels remain white.
 
@@ -311,9 +396,10 @@ PNG does not store an encoder's exact implementation or literal 0-9 setting,
 so a corrected file cannot be promised the same byte count as its source. A
 smaller corrected PNG is still lossless; the meaningful invariants are sample
 depth, color type, alpha, recognized metadata, dimensions, and pixel values.
-An exposure/white-balance discontinuity is suitable for the native engine; an
-object split, double edge, or incompatible generated texture belongs in the
-Reference Repair node or another generative edit.
+An exposure/white-balance discontinuity is suitable for the ordinary native
+engine. An object split or double edge can use `strucfix` when the two shifted
+overlap renders exist; otherwise it belongs in the painted Reference Repair
+workflow or another generative edit.
 
 The method and its limits are documented in [docs/DESIGN.md](docs/DESIGN.md).
 The video reconstruction, timestamps, and scientific references are recorded

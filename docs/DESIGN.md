@@ -119,6 +119,47 @@ The ComfyUI IMAGE node uses the same engine through a raw float32 descriptor.
 The separate file node is the preferred path for 16K images because returning an
 `IMAGE` tensor inherently asks ComfyUI to materialize the complete image.
 
+## Registered cross structural repair
+
+The `strucfix` command addresses a different information problem from the
+photometric solver. Four original quadrant renders cannot reveal which side of
+a split finger or object edge is canonical. Two shifted overlap assemblies add
+that missing evidence:
+
+- the portrait reference crosses the original vertical join inside each PiD
+  render and therefore supplies structure for `--x`;
+- the landscape reference crosses the original horizontal join and therefore
+  supplies structure for `--y`.
+
+Registration is analytic rather than estimated. The short axis of each cross
+is centered on the supplied seam; its long axis must equal the corresponding
+base dimension. Samples are never scaled or warped.
+
+On each of the four sides, the engine evaluates corresponding base/reference
+pixels between one quarter of the available half-strip and its outer edge. The
+stitch cost combines log-linear RGB difference with a larger-weight local
+gradient difference. Per-scanline minima are median-filtered and smoothed into
+a continuous outer stitch curve. A robust local log-RGB match measured at that
+curve is smoothed along the tangent and interpolated inward, preventing the
+alternate PiD render from reintroducing a white-balance boundary.
+
+The reference is full strength at the original join and decays with a raised
+cosine to exact zero at the adaptive stitch curve. Its derivative is zero at
+both locations. Portrait and landscape masks form a probabilistic union; the
+union's reference share is divided with orthogonal-seam-aware axis weights.
+The portrait dominates the vertical join as the landscape's own vertical tile
+boundary is approached, and vice versa. A small symmetric floor makes the
+single exact center well-defined.
+Consequently the corrected base and both references form a partition of unity
+at every pixel, including the central intersection. Base alpha is immutable,
+transparent reference samples contribute no evidence, and source channels that
+are exactly white remain exactly white.
+
+This path intentionally replaces structure, unlike the gain-only photometric
+path. It blends only pixel-aligned samples and never performs a spatial filter,
+resize, latent conversion, or lossy encode. The output retains the base PNG's
+sample depth, color type, recognized metadata, and DEFLATE strength class.
+
 ## Tutorial-derived reference repair
 
 The separate Reference Repair node intentionally does spatial work: it resizes

@@ -62,6 +62,24 @@ seamingly-epic correct input.png output.png --grid 2x2
 
 An existing output is refused unless `--overwrite` is explicit.
 
+`strucfix` is a separate structural compositor for one exact X/Y intersection.
+It consumes the already-photometrically-corrected base plus two registered PiD
+overlap renders:
+
+```powershell
+seamingly-epic strucfix --x 4096 --y 4096 `
+  --in output.png --out outputfinal.png `
+  --xcross landscape.png --ycross portrait.png
+```
+
+For an 8192x8192 base, `--xcross` must be 8192x4096 and is centered at
+`y=4096`; `--ycross` must be 4096x8192 and is centered at `x=4096`. More
+generally, the landscape reference must span the complete base width, the
+portrait reference must span the complete base height, and each short axis
+must be even and fit when centered on its supplied seam. No registration or
+resizing fallback exists. An existing output is refused unless `--overwrite`
+is supplied.
+
 `raw-f32` is the machine interface used by the ComfyUI IMAGE node. It consumes
 a JSON descriptor for little-endian, contiguous `[B,H,W,C]` float32 files. It is
 documented so other local tools can use the same zero-quantization path, but
@@ -163,6 +181,12 @@ Set `SEAMINGLY_EPIC_TEMP` to a large local SSD directory when the system temp
 volume is unsuitable. Native PNG staging honors the same setting. Scratch files
 are anonymous and are deleted when their owning process handles close. The
 Streaming PNG node is preferable for extreme sizes.
+
+`strucfix` memory-maps the base and both cross references concurrently. The
+standard RGB8 8192x8192 + 8192x4096 + 4096x8192 geometry therefore stages about
+384 MiB of source samples. Four `f64` distance curves and twelve compact gain
+profiles scale only with image width/height. Candidate matching and final rows
+run in parallel on Rayon's platform pool; PNG decode and encode remain serial.
 
 ## PNG support
 
