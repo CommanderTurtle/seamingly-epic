@@ -5,6 +5,132 @@ independently refined image tiles. It targets the exact case where four
 1024-to-4096 PiD passes are assembled into one 8192x8192 image and the join at
 `x=4096` or `y=4096` remains faintly visible.
 
+## The whole method
+
+Tiles are nodes, shared boundaries are sparse connections, and successive
+Laplacian iterations expand the effective receptive field until distant tiles
+participate in the global solution—while retaining higher-resolution local
+seam profiles. It is much like sparse attention for an image grid, except the
+result is a deterministic graph optimization rather than a learned model.
+
+The ordinary zero-configuration invocation is therefore only:
+
+```bash
+seamingly-epic --x 4096 --y 4096 --in myfile.png --out fixed.png
+```
+
+Any number of comma-separated X and Y coordinates automatically defines the
+tiles and every true shared boundary. No grid dimensions, adjacency depth,
+sampling plan, or correction strength has to be supplied.
+
+More formally, let the tile graph be $G=(V,E)$. Every tile $i\in V$ is a node.
+Every measured shared boundary $(i,j)\in E$ is an edge with confidence weight
+$w_{ij}$ and a robust log-linear RGB jump $\mathbf d_{ij}$. The unknown
+three-channel log gain $\mathbf g_i$ for each tile should satisfy
+
+$$
+\mathbf g_j-\mathbf g_i \approx -\mathbf d_{ij}.
+$$
+
+All boundaries are reconciled at once by the zero-mean weighted least-squares
+problem
+
+$$
+\mathbf g^\star=
+\underset{\sum_{i\in V}\mathbf g_i=\mathbf 0}{\operatorname{arg\,min}}
+\sum_{(i,j)\in E} w_{ij}
+\left\|\left(\mathbf g_j-\mathbf g_i\right)+\mathbf d_{ij}\right\|_2^2.
+$$
+
+With oriented incidence matrix $B$, diagonal edge-weight matrix $W$, and the
+stacked boundary observations $\mathbf d$, this is the weighted graph
+Laplacian system
+
+$$
+L_W\mathbf g=\mathbf b,
+\qquad
+L_W=B^{\mathsf T}WB,
+\qquad
+\mathbf b=-B^{\mathsf T}W\mathbf d.
+$$
+
+The native engine never materializes that matrix. It removes the constant-gain
+nullspace with one temporary gauge anchor,
+
+$$
+\widetilde L_W=L_W+\alpha\mathbf e_0\mathbf e_0^{\mathsf T},
+\qquad
+\alpha=\max\!\left(1,\sum_{e\in E}w_e\right),
+$$
+
+solves each RGB channel, and recenters the result to zero mean. With Jacobi
+preconditioner $M=\operatorname{diag}(\widetilde L_W)$, its matrix-free
+conjugate-gradient solve works in the Krylov spaces
+
+$$
+\mathcal K_k(M^{-1}\widetilde L_W,M^{-1}\mathbf b)=
+\operatorname{span}\!\left\{
+M^{-1}\mathbf b,
+(M^{-1}\widetilde L_W)M^{-1}\mathbf b,
+(M^{-1}\widetilde L_W)^2M^{-1}\mathbf b,
+\ldots,
+(M^{-1}\widetilde L_W)^{k-1}M^{-1}\mathbf b
+\right\}.
+$$
+
+One Laplacian multiplication communicates across one shared boundary;
+successive directions retain earlier information while extending it through
+another adjacency depth. At convergence, even opposite corners influence one
+another through every real path and cycle in the connected tile graph. No
+fictional diagonal or distant pixel comparison is introduced. Storage and
+each graph iteration remain $O(|V|+|E|)$.
+
+The graph solve handles the globally consistent part of the correction. The
+remaining position-varying mismatch stays attached to the boundary that
+actually measured it. For output pixel $p$, tile $\tau(p)$, nearby measured
+edges $\mathcal N(\tau(p))$, along-edge coordinate $t_e(p)$, signed half-split
+$s_e(p)\in\{-\tfrac12,+\tfrac12\}$, residual profile $\mathbf r_e$, and
+raised-cosine support $\phi_e$, the complete per-pixel log correction is
+
+$$
+\mathbf c(p)=\mathbf g_{\tau(p)}+
+\sum_{e\in\mathcal N(\tau(p))}
+s_e(p)\,\phi_e(p)\,\mathbf r_e\!\left(t_e(p)\right),
+$$
+
+where, for normal distance $n_e(p)$ and feather half-width $h_e$,
+
+$$
+\phi_e(p)=
+\begin{cases}
+\tfrac12\!\left[1+\cos\!\left(\pi |n_e(p)|/h_e\right)\right],
+& |n_e(p)|<h_e,\\[4pt]
+0, & |n_e(p)|\ge h_e.
+\end{cases}
+$$
+
+The source is then changed only photometrically in linear light:
+
+$$
+\mathbf I_{\mathrm{out}}(p)=
+\exp\!\left(\log\mathbf I_{\mathrm{in}}(p)+\mathbf c(p)\right).
+$$
+
+This per-pixel field is the two-dimensional **smokemap**: a continuous map
+derived from every accepted scanline and every globally related tile. The
+correction field is smoothed; the image is never blurred, resampled, denoised,
+or regenerated. Local seam evidence remains local because broadcasting it to
+a distant tile would invent a measurement, while the Laplacian gain solve
+already carries the valid all-depth relationship.
+
+Boundary segments and output rows run in parallel with Rayon. `threads=0`
+uses the platform pool (normally every available logical CPU), decoded PNG data
+is held in a bounded memory-mapped backing file, and only inherently sequential
+PNG decode/encode stages stay serial. The sparse graph solve is tiny beside the
+pixel pass. A GPU is intentionally unnecessary: transferring this deterministic
+element-wise correction through CUDA would not improve its mathematics, color
+fidelity, or output quality.
+
 The project provides two complementary repairs:
 
 - **Native photometric correction** measures persistent boundary steps in
