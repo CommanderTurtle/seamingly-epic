@@ -46,6 +46,24 @@ pub struct ImageReport {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FieldReport {
+    /// Exact reconstruction method used for the full-resolution field.
+    pub strategy: String,
+    /// Numeric precision of the reconstructed correction field.
+    pub precision: String,
+    /// Number of per-position seam impulses supplied to the global solve.
+    pub seam_impulses: u64,
+    /// Dense tile-to-tile relationships represented by the inverse Laplacian.
+    pub conceptual_tile_relationships: u64,
+    /// Number of output pixels receiving independently evaluated corrections.
+    pub output_pixels: u64,
+    /// Temporary storage occupied by the three f64 correction planes.
+    pub stored_field_bytes: u64,
+    /// Common exposure gauge applied to retain the source highlight ceiling.
+    pub headroom_shift_stops: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CorrectionReport {
     pub version: u32,
     pub image: ImageReport,
@@ -53,6 +71,7 @@ pub struct CorrectionReport {
     pub config: CorrectionConfig,
     pub boundaries: Vec<BoundaryReport>,
     pub tile_gains: Vec<TileGainReport>,
+    pub field: FieldReport,
     pub warnings: Vec<String>,
     pub applied: bool,
 }

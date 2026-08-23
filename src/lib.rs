@@ -3,6 +3,7 @@
 pub mod color;
 pub mod config;
 pub mod engine;
+mod ghost;
 pub mod layout;
 pub mod png_io;
 pub mod raw_io;

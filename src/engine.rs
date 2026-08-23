@@ -6,8 +6,11 @@ use rayon::prelude::*;
 use crate::{
     color::{Rgb, add, log_gain_to_stops, log_rgb, norm, scale, sub},
     config::CorrectionConfig,
+    ghost::{GhostField, GhostFieldBuilder, solve_neumann_poisson, try_zeroed},
     layout::Layout,
-    report::{BoundaryReport, CorrectionReport, ImageReport, Orientation, TileGainReport},
+    report::{
+        BoundaryReport, CorrectionReport, FieldReport, ImageReport, Orientation, TileGainReport,
+    },
     robust::{RobustEstimate, robust_rgb, smooth_profile},
     solve::{GainConstraint, limit_gains, solve_tile_gains},
 };
@@ -95,14 +98,24 @@ impl LocalField {
 pub(crate) struct CorrectionModel {
     pub report: CorrectionReport,
     gains: Vec<Rgb>,
+    ghost: Option<GhostField>,
     vertical: Vec<Option<LocalField>>,
     horizontal: Vec<Option<LocalField>>,
     max_log_gain: f64,
+    headroom_log_offset: f64,
 }
 
 impl CorrectionModel {
     #[must_use]
     pub fn log_gain_at(&self, x: u32, y: u32) -> Rgb {
+        let mut gain = self.unshifted_log_gain_at(x, y);
+        for channel in &mut gain {
+            *channel += self.headroom_log_offset;
+        }
+        gain
+    }
+
+    fn unshifted_log_gain_at(&self, x: u32, y: u32) -> Rgb {
         let layout = &self.report.layout;
         let column = layout.x_seams.partition_point(|seam| x >= *seam);
         let row = layout.y_seams.partition_point(|seam| y >= *seam);
@@ -110,6 +123,12 @@ impl CorrectionModel {
         let mut gain = self.gains[tile];
         let blend_width = self.report.config.blend_width;
         let local_strength = self.report.config.local_strength.clamp(0.0, 2.0);
+
+        if local_strength > 0.0
+            && let Some(field) = &self.ghost
+        {
+            gain = add(gain, scale(field.sample(x, y), local_strength));
+        }
 
         if blend_width > 0 && local_strength > 0.0 {
             // Only the immediately adjacent boundaries can influence a pixel when
@@ -164,6 +183,109 @@ fn raised_cosine(unit_distance: f64) -> f64 {
         0.0
     } else {
         0.5 * (1.0 + (PI * unit_distance.max(0.0)).cos())
+    }
+}
+
+fn build_global_ghost(
+    layout: &Layout,
+    vertical: &[Option<LocalField>],
+    horizontal: &[Option<LocalField>],
+) -> Result<GhostField> {
+    let width = layout.width as usize;
+    let height = layout.height as usize;
+    let pixel_count = width
+        .checked_mul(height)
+        .context("global correction field exceeds this platform's address space")?;
+    let mut store = GhostFieldBuilder::new(layout.width, layout.height)?;
+
+    for channel in 0..3 {
+        let mut rhs = try_zeroed(pixel_count)?;
+        for field in vertical.iter().flatten() {
+            let right_x = field.coordinate as usize;
+            let left_x = right_x - 1;
+            for (offset, profile) in field.profile.iter().enumerate() {
+                let y = field.segment_start as usize + offset;
+                let left = y * width + left_x;
+                let right = y * width + right_x;
+                // Desired edge gradient is -profile. For incidence [-1,+1],
+                // B^T(-profile) contributes +profile left and -profile right.
+                rhs[left] += profile[channel];
+                rhs[right] -= profile[channel];
+            }
+        }
+        for field in horizontal.iter().flatten() {
+            let bottom_y = field.coordinate as usize;
+            let top_y = bottom_y - 1;
+            for (offset, profile) in field.profile.iter().enumerate() {
+                let x = field.segment_start as usize + offset;
+                let top = top_y * width + x;
+                let bottom = bottom_y * width + x;
+                rhs[top] += profile[channel];
+                rhs[bottom] -= profile[channel];
+            }
+        }
+        let solution = solve_neumann_poisson(layout.width, layout.height, rhs)?;
+        store.write_channel(channel, &solution)?;
+    }
+    store.finish()
+}
+
+fn close_projected_residuals(
+    ghost: &GhostField,
+    vertical: &mut [Option<LocalField>],
+    horizontal: &mut [Option<LocalField>],
+    config: &CorrectionConfig,
+) {
+    if config.blend_width == 0 {
+        return;
+    }
+    // At the two discrete samples straddling a seam, the symmetric ramp has
+    // coefficients +0.5*cosine(1/w) and -0.5. Compensating by their exact
+    // difference closes whatever non-integrable component the global least-
+    // squares projection could not reproduce.
+    let closure_factor = 0.5 * (1.0 + raised_cosine(1.0 / f64::from(config.blend_width)));
+
+    for field in vertical.iter_mut().flatten() {
+        for (offset, profile) in field.profile.iter_mut().enumerate() {
+            let y = field.segment_start + offset as u32;
+            let left = ghost.sample(field.coordinate - 1, y);
+            let right = ghost.sample(field.coordinate, y);
+            let achieved = sub(right, left);
+            *profile = scale(add(*profile, achieved), 1.0 / closure_factor);
+        }
+    }
+    for field in horizontal.iter_mut().flatten() {
+        for (offset, profile) in field.profile.iter_mut().enumerate() {
+            let x = field.segment_start + offset as u32;
+            let top = ghost.sample(x, field.coordinate - 1);
+            let bottom = ghost.sample(x, field.coordinate);
+            let achieved = sub(bottom, top);
+            *profile = scale(add(*profile, achieved), 1.0 / closure_factor);
+        }
+    }
+}
+
+fn compute_headroom_offset<S: PixelSource>(source: &S, model: &CorrectionModel) -> f64 {
+    let corrected_peak = (0..source.height())
+        .into_par_iter()
+        .map(|y| {
+            let mut row_peak = 0.0_f64;
+            for x in 0..source.width() {
+                let Some(rgb) = source.linear_rgb(x, y) else {
+                    continue;
+                };
+                let gain = model.unshifted_log_gain_at(x, y);
+                for channel in 0..3 {
+                    row_peak = row_peak.max(rgb[channel] * gain[channel].exp());
+                }
+            }
+            row_peak
+        })
+        .reduce(|| 0.0, f64::max);
+    if corrected_peak > 1.0 && corrected_peak.is_finite() {
+        -corrected_peak.ln()
+    } else {
+        0.0
     }
 }
 
@@ -236,6 +358,20 @@ pub(crate) fn build_model<S: PixelSource>(
         .iter()
         .filter(|analysis| analysis.accepted(config))
         .count();
+    let seam_impulses = vertical
+        .iter()
+        .chain(horizontal.iter())
+        .flatten()
+        .map(|field| field.profile.len() as u64)
+        .sum::<u64>();
+    let ghost = if accepted > 0 && config.local_strength > 0.0 {
+        let field = build_global_ghost(&layout, &vertical, &horizontal)?;
+        close_projected_residuals(&field, &mut vertical, &mut horizontal, config);
+        Some(field)
+    } else {
+        None
+    };
+
     let mut warnings = Vec::new();
     if accepted == 0 {
         warnings.push(
@@ -250,7 +386,7 @@ pub(crate) fn build_model<S: PixelSource>(
     }
     if accepted > 0 && !graph_connected {
         warnings.push(
-            "Accepted constraints do not connect every tile; global tile gains were disabled and only local seam ramps were applied."
+            "Accepted constraints do not connect every tile; global tile gains were disabled while accepted full-resolution seam constraints remained active."
                 .to_owned(),
         );
     }
@@ -286,24 +422,52 @@ pub(crate) fn build_model<S: PixelSource>(
         .iter()
         .map(|analysis| analysis.to_report(config))
         .collect();
+    let output_pixels = u64::from(image.width) * u64::from(image.height);
+    let tile_count = layout.tile_count() as u64;
     let report = CorrectionReport {
-        version: 1,
+        version: 2,
         image,
         layout,
         config: config.clone(),
         boundaries,
         tile_gains,
+        field: FieldReport {
+            strategy: if ghost.is_some() {
+                "global_neumann_poisson_dct_with_exact_boundary_closure".to_owned()
+            } else {
+                "disabled".to_owned()
+            },
+            precision: "f64_log_linear_rgb".to_owned(),
+            seam_impulses,
+            conceptual_tile_relationships: tile_count.saturating_mul(tile_count),
+            output_pixels,
+            stored_field_bytes: if ghost.is_some() {
+                output_pixels.saturating_mul(3 * size_of::<f64>() as u64)
+            } else {
+                0
+            },
+            headroom_shift_stops: 0.0,
+        },
         warnings,
         applied: accepted > 0,
     };
 
-    Ok(CorrectionModel {
+    let mut model = CorrectionModel {
         report,
         gains,
+        ghost,
         vertical,
         horizontal,
         max_log_gain: config.max_gain_stops.max(0.0) * LN_2,
-    })
+        headroom_log_offset: 0.0,
+    };
+    if model.report.applied {
+        model.headroom_log_offset = with_threads(config.threads, || {
+            Ok(compute_headroom_offset(source, &model))
+        })?;
+        model.report.field.headroom_shift_stops = model.headroom_log_offset / LN_2;
+    }
+    Ok(model)
 }
 
 fn constraint_graph_connected(tile_count: usize, constraints: &[GainConstraint]) -> bool {
