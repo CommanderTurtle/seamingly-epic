@@ -126,7 +126,7 @@ struct Settings {
     /// Sample every Nth pixel along a boundary; one walks every row/column.
     #[arg(long, default_value_t = 1)]
     sample_stride: u32,
-    /// Width of the raised-cosine exact-boundary closure ramp.
+    /// Legacy compatibility value; wave support is inferred to each tile midpoint.
     #[arg(long, default_value_t = 192)]
     blend_width: u32,
     /// Low-pass radius along a residual profile (source pixels are never blurred).
@@ -135,14 +135,14 @@ struct Settings {
     /// Global correction multiplier.
     #[arg(long, default_value_t = 1.0)]
     strength: f64,
-    /// Full-resolution residual-field and exact-closure multiplier.
+    /// Position-varying seam-profile multiplier.
     #[arg(long, default_value_t = 1.0)]
     local_strength: f64,
     /// Per-channel correction limit in photographic stops.
     #[arg(long, default_value_t = 0.75)]
     max_gain_stops: f64,
     /// Reject boundary segments below this confidence.
-    #[arg(long, default_value_t = 0.18)]
+    #[arg(long, default_value_t = 0.0)]
     min_confidence: f64,
     /// Transfer function of the stored RGB values.
     #[arg(long, value_enum, default_value_t = TransferArg::Srgb)]
@@ -241,6 +241,7 @@ fn run_direct(direct: Direct) -> Result<()> {
         // Explicit direct-mode coordinates are authoritative. Advanced mode
         // remains available when a nearby-coordinate search is desired.
         refine_radius: 0,
+        min_confidence: 0.0,
         ..CorrectionConfig::default()
     };
     let result = correct_png(input, output, &config, direct.overwrite)?;

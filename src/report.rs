@@ -53,14 +53,26 @@ pub struct FieldReport {
     pub precision: String,
     /// Number of per-position seam impulses supplied to the global solve.
     pub seam_impulses: u64,
-    /// Dense tile-to-tile relationships represented by the inverse Laplacian.
+    /// Ordered tile relationships reconciled through the sparse tile Laplacian.
     pub conceptual_tile_relationships: u64,
     /// Number of output pixels receiving independently evaluated corrections.
     pub output_pixels: u64,
-    /// Temporary storage occupied by the three f64 correction planes.
+    /// Storage occupied by target and two-sided f64 RGB seam profiles.
     pub stored_field_bytes: u64,
-    /// Common exposure gauge applied to avoid clipping at the encoding ceiling.
+    /// Retained for report compatibility. Midpoint anchoring keeps this zero.
     pub headroom_shift_stops: f64,
+    /// Number of tile interiors at which every normal correction wave is zero.
+    #[serde(default)]
+    pub neutral_interior_anchors: u64,
+    /// Accepted alternating projection passes across intersecting seam profiles.
+    #[serde(default)]
+    pub refinement_passes: u32,
+    /// Maximum boundary mismatch before intersection refinement, in stops.
+    #[serde(default)]
+    pub initial_max_residual_stops: f64,
+    /// Maximum boundary mismatch after intersection refinement, in stops.
+    #[serde(default)]
+    pub final_max_residual_stops: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

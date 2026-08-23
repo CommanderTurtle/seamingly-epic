@@ -46,13 +46,13 @@ pub struct CorrectionConfig {
     pub refine_radius: u32,
     /// Sample every Nth pixel along a boundary. One performs a complete scanline walk.
     pub sample_stride: u32,
-    /// Width over which the exact-boundary closure field fades to zero.
+    /// Legacy compatibility value. Normal support is inferred to each tile midpoint.
     pub blend_width: u32,
     /// Radius of low-pass smoothing along the seam profile.
     pub profile_smooth_radius: u32,
     /// Overall correction multiplier.
     pub strength: f64,
-    /// Full-resolution profile reconstruction and closure multiplier.
+    /// Position-varying seam-profile multiplier.
     pub local_strength: f64,
     /// Maximum absolute per-channel gain, expressed in photographic stops.
     pub max_gain_stops: f64,
@@ -79,7 +79,7 @@ impl Default for CorrectionConfig {
             strength: 1.0,
             local_strength: 1.0,
             max_gain_stops: 0.75,
-            min_confidence: 0.18,
+            min_confidence: 0.0,
             transfer: TransferFunction::Srgb,
             threads: 0,
         }

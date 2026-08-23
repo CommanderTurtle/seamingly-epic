@@ -57,15 +57,34 @@ pub fn norm(value: Rgb) -> f64 {
 
 #[must_use]
 pub fn apply_log_gain(rgb: Rgb, gain: Rgb) -> Rgb {
-    [
-        (rgb[0] * gain[0].exp()).clamp(0.0, 1.0),
-        (rgb[1] * gain[1].exp()).clamp(0.0, 1.0),
-        (rgb[2] * gain[2].exp()).clamp(0.0, 1.0),
-    ]
+    std::array::from_fn(|channel| {
+        if rgb[channel] >= 1.0 {
+            // A clipped source channel contains no recoverable photometric
+            // magnitude. Keep its exact endpoint instead of inventing gray
+            // from a neighboring seam estimate.
+            1.0
+        } else {
+            (rgb[channel] * gain[channel].exp()).clamp(0.0, 1.0)
+        }
+    })
 }
 
 #[must_use]
 pub fn log_gain_to_stops(gain: Rgb) -> Rgb {
     let divisor = std::f64::consts::LN_2;
     gain.map(|value| value / divisor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_white_channels_remain_exact_white() {
+        assert_eq!(
+            apply_log_gain([1.0, 1.0, 1.0], [-2.0, -0.5, 1.0]),
+            [1.0, 1.0, 1.0]
+        );
+        assert_eq!(apply_log_gain([1.0, 0.5, 0.25], [-2.0, 0.0, 0.0])[0], 1.0);
+    }
 }

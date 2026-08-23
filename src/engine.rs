@@ -6,7 +6,6 @@ use rayon::prelude::*;
 use crate::{
     color::{Rgb, add, log_gain_to_stops, log_rgb, norm, scale, sub},
     config::CorrectionConfig,
-    ghost::{GhostField, GhostFieldBuilder, solve_neumann_poisson, try_zeroed},
     layout::Layout,
     report::{
         BoundaryReport, CorrectionReport, FieldReport, ImageReport, Orientation, TileGainReport,
@@ -46,7 +45,7 @@ struct BoundaryAnalysis {
 
 impl BoundaryAnalysis {
     fn accepted(&self, config: &CorrectionConfig) -> bool {
-        self.estimate.is_some() && self.confidence >= config.min_confidence
+        self.estimate.is_some() && self.confidence > 0.0 && self.confidence >= config.min_confidence
     }
 
     fn to_report(&self, config: &CorrectionConfig) -> BoundaryReport {
@@ -79,102 +78,52 @@ struct LocalField {
     coordinate: u32,
     segment_start: u32,
     segment_end: u32,
-    profile: Vec<Rgb>,
+    target_difference: Vec<Rgb>,
+    side_a: Vec<Rgb>,
+    side_b: Vec<Rgb>,
 }
 
 impl LocalField {
-    fn sample(&self, position: u32) -> Rgb {
-        if self.profile.is_empty() {
-            return [0.0; 3];
+    fn sample_index(&self, position: u32) -> Option<usize> {
+        if self.target_difference.is_empty() {
+            return None;
         }
-        let index = position
-            .saturating_sub(self.segment_start)
-            .min(self.segment_end - self.segment_start - 1);
-        self.profile[index as usize]
+        Some(
+            position
+                .saturating_sub(self.segment_start)
+                .min(self.segment_end - self.segment_start - 1) as usize,
+        )
+    }
+
+    fn sample(profile: &[Rgb], index: Option<usize>) -> Rgb {
+        let Some(index) = index else {
+            return [0.0; 3];
+        };
+        profile[index]
+    }
+
+    fn side_a_at(&self, position: u32) -> Rgb {
+        Self::sample(&self.side_a, self.sample_index(position))
+    }
+
+    fn side_b_at(&self, position: u32) -> Rgb {
+        Self::sample(&self.side_b, self.sample_index(position))
     }
 }
 
 /// Fully analyzed correction field. PNG and float32 transports share it.
 pub(crate) struct CorrectionModel {
     pub report: CorrectionReport,
-    gains: Vec<Rgb>,
-    ghost: Option<GhostField>,
     vertical: Vec<Option<LocalField>>,
     horizontal: Vec<Option<LocalField>>,
     max_log_gain: f64,
-    headroom_log_offset: f64,
 }
 
 impl CorrectionModel {
     #[must_use]
     pub fn log_gain_at(&self, x: u32, y: u32) -> Rgb {
-        let mut gain = self.unshifted_log_gain_at(x, y);
-        for channel in &mut gain {
-            *channel += self.headroom_log_offset;
-        }
-        gain
-    }
-
-    fn unshifted_log_gain_at(&self, x: u32, y: u32) -> Rgb {
-        let layout = &self.report.layout;
-        let column = layout.x_seams.partition_point(|seam| x >= *seam);
-        let row = layout.y_seams.partition_point(|seam| y >= *seam);
-        let tile = layout.tile_index(column, row);
-        let mut gain = self.gains[tile];
-        let blend_width = self.report.config.blend_width;
-        let local_strength = self.report.config.local_strength.clamp(0.0, 2.0);
-
-        if local_strength > 0.0
-            && let Some(field) = &self.ghost
-        {
-            gain = add(gain, scale(field.sample(x, y), local_strength));
-        }
-
-        if blend_width > 0 && local_strength > 0.0 {
-            // Only the immediately adjacent boundaries can influence a pixel when
-            // ordinary non-overlapping tile widths are used. Checking both sides
-            // also remains correct for deliberately narrow or irregular grids.
-            for seam_index in [column.checked_sub(1), Some(column)]
-                .into_iter()
-                .flatten()
-                .filter(|index| *index < layout.x_seams.len())
-            {
-                let field_index = seam_index * layout.rows() + row;
-                if let Some(field) = &self.vertical[field_index] {
-                    let delta = i64::from(x) - i64::from(field.coordinate);
-                    let distance = delta.unsigned_abs();
-                    if distance < u64::from(blend_width) {
-                        let fade = raised_cosine(distance as f64 / f64::from(blend_width));
-                        let side = if delta < 0 { 0.5 } else { -0.5 };
-                        // Confidence gates creation of the field. Attenuating an
-                        // accepted residual by confidence would intentionally
-                        // leave a measurable fraction of the seam in place.
-                        let amount = side * fade * local_strength;
-                        gain = add(gain, scale(field.sample(y), amount));
-                    }
-                }
-            }
-
-            for seam_index in [row.checked_sub(1), Some(row)]
-                .into_iter()
-                .flatten()
-                .filter(|index| *index < layout.y_seams.len())
-            {
-                let field_index = seam_index * layout.columns() + column;
-                if let Some(field) = &self.horizontal[field_index] {
-                    let delta = i64::from(y) - i64::from(field.coordinate);
-                    let distance = delta.unsigned_abs();
-                    if distance < u64::from(blend_width) {
-                        let fade = raised_cosine(distance as f64 / f64::from(blend_width));
-                        let side = if delta < 0 { 0.5 } else { -0.5 };
-                        let amount = side * fade * local_strength;
-                        gain = add(gain, scale(field.sample(x), amount));
-                    }
-                }
-            }
-        }
-
-        gain.map(|value| value.clamp(-self.max_log_gain, self.max_log_gain))
+        wave_gain_at(&self.report.layout, &self.vertical, &self.horizontal, x, y)
+            .map(|value| value.clamp(-self.max_log_gain, self.max_log_gain))
     }
 }
 
@@ -186,106 +135,268 @@ fn raised_cosine(unit_distance: f64) -> f64 {
     }
 }
 
-fn build_global_ghost(
+/// Evaluate a seam-normal wave which is exactly one at the two samples touching
+/// the join and exactly zero at the center of the neighboring tile. The other
+/// half of that tile is untouched. This makes the source tile interior the
+/// gauge: correction cannot turn into an image-wide exposure shift.
+fn midpoint_wave(position: u32, seam: u32, outer_edge: u32, before_seam: bool) -> f64 {
+    let (boundary, anchor) = if before_seam {
+        let width = seam.saturating_sub(outer_edge);
+        (seam - 1, outer_edge + width / 2)
+    } else {
+        let width = outer_edge.saturating_sub(seam);
+        (seam, seam + width / 2)
+    };
+
+    if position == boundary {
+        return 1.0;
+    }
+    if boundary == anchor {
+        return 0.0;
+    }
+
+    let unit_distance = if before_seam {
+        if position <= anchor || position > boundary {
+            return 0.0;
+        }
+        f64::from(boundary - position) / f64::from(boundary - anchor)
+    } else {
+        if position >= anchor || position < boundary {
+            return 0.0;
+        }
+        f64::from(position - boundary) / f64::from(anchor - boundary)
+    };
+    raised_cosine(unit_distance)
+}
+
+fn wave_gain_at(
     layout: &Layout,
     vertical: &[Option<LocalField>],
     horizontal: &[Option<LocalField>],
-) -> Result<GhostField> {
-    let width = layout.width as usize;
-    let height = layout.height as usize;
-    let pixel_count = width
-        .checked_mul(height)
-        .context("global correction field exceeds this platform's address space")?;
-    let mut store = GhostFieldBuilder::new(layout.width, layout.height)?;
+    x: u32,
+    y: u32,
+) -> Rgb {
+    let column = layout.x_seams.partition_point(|seam| x >= *seam);
+    let row = layout.y_seams.partition_point(|seam| y >= *seam);
+    let mut gain = [0.0; 3];
 
-    for channel in 0..3 {
-        let mut rhs = try_zeroed(pixel_count)?;
-        for field in vertical.iter().flatten() {
-            let right_x = field.coordinate as usize;
-            let left_x = right_x - 1;
-            for (offset, profile) in field.profile.iter().enumerate() {
-                let y = field.segment_start as usize + offset;
-                let left = y * width + left_x;
-                let right = y * width + right_x;
-                // Desired edge gradient is -profile. For incidence [-1,+1],
-                // B^T(-profile) contributes +profile left and -profile right.
-                rhs[left] += profile[channel];
-                rhs[right] -= profile[channel];
-            }
+    // The seam on this tile's left contributes its B/right-side endpoint.
+    if column > 0 {
+        let seam_index = column - 1;
+        let field_index = seam_index * layout.rows() + row;
+        if let Some(field) = &vertical[field_index] {
+            let outer_edge = layout.x_seams.get(column).copied().unwrap_or(layout.width);
+            let wave = midpoint_wave(x, field.coordinate, outer_edge, false);
+            gain = add(gain, scale(field.side_b_at(y), wave));
         }
-        for field in horizontal.iter().flatten() {
-            let bottom_y = field.coordinate as usize;
-            let top_y = bottom_y - 1;
-            for (offset, profile) in field.profile.iter().enumerate() {
-                let x = field.segment_start as usize + offset;
-                let top = top_y * width + x;
-                let bottom = bottom_y * width + x;
-                rhs[top] += profile[channel];
-                rhs[bottom] -= profile[channel];
-            }
-        }
-        let solution = solve_neumann_poisson(layout.width, layout.height, rhs)?;
-        store.write_channel(channel, &solution)?;
     }
-    store.finish()
+
+    // The seam on this tile's right contributes its A/left-side endpoint.
+    if column < layout.x_seams.len() {
+        let field_index = column * layout.rows() + row;
+        if let Some(field) = &vertical[field_index] {
+            let outer_edge = column
+                .checked_sub(1)
+                .and_then(|index| layout.x_seams.get(index))
+                .copied()
+                .unwrap_or(0);
+            let wave = midpoint_wave(x, field.coordinate, outer_edge, true);
+            gain = add(gain, scale(field.side_a_at(y), wave));
+        }
+    }
+
+    // The seam above this tile contributes its B/bottom-side endpoint.
+    if row > 0 {
+        let seam_index = row - 1;
+        let field_index = seam_index * layout.columns() + column;
+        if let Some(field) = &horizontal[field_index] {
+            let outer_edge = layout.y_seams.get(row).copied().unwrap_or(layout.height);
+            let wave = midpoint_wave(y, field.coordinate, outer_edge, false);
+            gain = add(gain, scale(field.side_b_at(x), wave));
+        }
+    }
+
+    // The seam below this tile contributes its A/top-side endpoint.
+    if row < layout.y_seams.len() {
+        let field_index = row * layout.columns() + column;
+        if let Some(field) = &horizontal[field_index] {
+            let outer_edge = row
+                .checked_sub(1)
+                .and_then(|index| layout.y_seams.get(index))
+                .copied()
+                .unwrap_or(0);
+            let wave = midpoint_wave(y, field.coordinate, outer_edge, true);
+            gain = add(gain, scale(field.side_a_at(x), wave));
+        }
+    }
+
+    gain
 }
 
-fn close_projected_residuals(
-    ghost: &GhostField,
+#[derive(Clone, Copy, Debug, Default)]
+struct WaveRefinement {
+    passes: u32,
+    initial_max_residual: f64,
+    final_max_residual: f64,
+}
+
+fn residual_magnitude(value: Rgb) -> f64 {
+    value.into_iter().map(f64::abs).fold(0.0, f64::max)
+}
+
+fn max_boundary_residual(
+    layout: &Layout,
+    vertical: &[Option<LocalField>],
+    horizontal: &[Option<LocalField>],
+) -> f64 {
+    let mut maximum = 0.0_f64;
+    for field in vertical.iter().flatten() {
+        for (offset, target) in field.target_difference.iter().copied().enumerate() {
+            let y = field.segment_start + offset as u32;
+            let left = wave_gain_at(layout, vertical, horizontal, field.coordinate - 1, y);
+            let right = wave_gain_at(layout, vertical, horizontal, field.coordinate, y);
+            maximum = maximum.max(residual_magnitude(sub(target, sub(right, left))));
+        }
+    }
+    for field in horizontal.iter().flatten() {
+        for (offset, target) in field.target_difference.iter().copied().enumerate() {
+            let x = field.segment_start + offset as u32;
+            let top = wave_gain_at(layout, vertical, horizontal, x, field.coordinate - 1);
+            let bottom = wave_gain_at(layout, vertical, horizontal, x, field.coordinate);
+            maximum = maximum.max(residual_magnitude(sub(target, sub(bottom, top))));
+        }
+    }
+    maximum
+}
+
+fn clamp_profile(value: Rgb, limit: f64) -> Rgb {
+    value.map(|channel| channel.clamp(-limit, limit))
+}
+
+fn refine_vertical(
+    layout: &Layout,
+    vertical: &mut [Option<LocalField>],
+    horizontal: &[Option<LocalField>],
+    relaxation: f64,
+    limit: f64,
+) {
+    for field_index in 0..vertical.len() {
+        let length = vertical[field_index]
+            .as_ref()
+            .map_or(0, |field| field.target_difference.len());
+        for offset in 0..length {
+            let (coordinate, y, target) = {
+                let field = vertical[field_index]
+                    .as_ref()
+                    .expect("accepted vertical field exists");
+                (
+                    field.coordinate,
+                    field.segment_start + offset as u32,
+                    field.target_difference[offset],
+                )
+            };
+            let left = wave_gain_at(layout, vertical, horizontal, coordinate - 1, y);
+            let right = wave_gain_at(layout, vertical, horizontal, coordinate, y);
+            let residual = sub(target, sub(right, left));
+            let half_step = scale(residual, 0.5 * relaxation);
+            let field = vertical[field_index]
+                .as_mut()
+                .expect("accepted vertical field exists");
+            field.side_a[offset] = clamp_profile(sub(field.side_a[offset], half_step), limit);
+            field.side_b[offset] = clamp_profile(add(field.side_b[offset], half_step), limit);
+        }
+    }
+}
+
+fn refine_horizontal(
+    layout: &Layout,
+    vertical: &[Option<LocalField>],
+    horizontal: &mut [Option<LocalField>],
+    relaxation: f64,
+    limit: f64,
+) {
+    for field_index in 0..horizontal.len() {
+        let length = horizontal[field_index]
+            .as_ref()
+            .map_or(0, |field| field.target_difference.len());
+        for offset in 0..length {
+            let (x, coordinate, target) = {
+                let field = horizontal[field_index]
+                    .as_ref()
+                    .expect("accepted horizontal field exists");
+                (
+                    field.segment_start + offset as u32,
+                    field.coordinate,
+                    field.target_difference[offset],
+                )
+            };
+            let top = wave_gain_at(layout, vertical, horizontal, x, coordinate - 1);
+            let bottom = wave_gain_at(layout, vertical, horizontal, x, coordinate);
+            let residual = sub(target, sub(bottom, top));
+            let half_step = scale(residual, 0.5 * relaxation);
+            let field = horizontal[field_index]
+                .as_mut()
+                .expect("accepted horizontal field exists");
+            field.side_a[offset] = clamp_profile(sub(field.side_a[offset], half_step), limit);
+            field.side_b[offset] = clamp_profile(add(field.side_b[offset], half_step), limit);
+        }
+    }
+}
+
+/// Alternating boundary projections remove the small cross-axis residuals that
+/// can occur where two independently varying seam profiles intersect. Each
+/// speculative pass is accepted only when it improves the measured maximum;
+/// otherwise it is rolled back and retried with a smaller relaxation factor.
+fn refine_wave_fields(
+    layout: &Layout,
     vertical: &mut [Option<LocalField>],
     horizontal: &mut [Option<LocalField>],
-    config: &CorrectionConfig,
-) {
-    if config.blend_width == 0 {
-        return;
-    }
-    // At the two discrete samples straddling a seam, the symmetric ramp has
-    // coefficients +0.5*cosine(1/w) and -0.5. Compensating by their exact
-    // difference closes whatever non-integrable component the global least-
-    // squares projection could not reproduce.
-    let closure_factor = 0.5 * (1.0 + raised_cosine(1.0 / f64::from(config.blend_width)));
+    max_log_gain: f64,
+) -> WaveRefinement {
+    const TARGET: f64 = 1.0e-8;
+    const MAX_ATTEMPTS: usize = 32;
 
-    for field in vertical.iter_mut().flatten() {
-        for (offset, profile) in field.profile.iter_mut().enumerate() {
-            let y = field.segment_start + offset as u32;
-            let left = ghost.sample(field.coordinate - 1, y);
-            let right = ghost.sample(field.coordinate, y);
-            let achieved = sub(right, left);
-            *profile = scale(add(*profile, achieved), 1.0 / closure_factor);
-        }
+    let initial = max_boundary_residual(layout, vertical, horizontal);
+    if initial <= TARGET {
+        return WaveRefinement {
+            initial_max_residual: initial,
+            final_max_residual: initial,
+            ..WaveRefinement::default()
+        };
     }
-    for field in horizontal.iter_mut().flatten() {
-        for (offset, profile) in field.profile.iter_mut().enumerate() {
-            let x = field.segment_start + offset as u32;
-            let top = ghost.sample(x, field.coordinate - 1);
-            let bottom = ghost.sample(x, field.coordinate);
-            let achieved = sub(bottom, top);
-            *profile = scale(add(*profile, achieved), 1.0 / closure_factor);
-        }
-    }
-}
 
-fn compute_headroom_offset<S: PixelSource>(source: &S, model: &CorrectionModel) -> f64 {
-    let corrected_peak = (0..source.height())
-        .into_par_iter()
-        .map(|y| {
-            let mut row_peak = 0.0_f64;
-            for x in 0..source.width() {
-                let Some(rgb) = source.linear_rgb(x, y) else {
-                    continue;
-                };
-                let gain = model.unshifted_log_gain_at(x, y);
-                for channel in 0..3 {
-                    row_peak = row_peak.max(rgb[channel] * gain[channel].exp());
-                }
+    let mut previous = initial;
+    let mut relaxation = 0.75;
+    let mut passes = 0_u32;
+    for _ in 0..MAX_ATTEMPTS {
+        let saved_vertical = vertical.to_vec();
+        let saved_horizontal = horizontal.to_vec();
+        refine_vertical(layout, vertical, horizontal, relaxation, max_log_gain);
+        refine_horizontal(layout, vertical, horizontal, relaxation, max_log_gain);
+        let next = max_boundary_residual(layout, vertical, horizontal);
+        if !next.is_finite() || next > previous * (1.0 + 1.0e-10) {
+            vertical.clone_from_slice(&saved_vertical);
+            horizontal.clone_from_slice(&saved_horizontal);
+            relaxation *= 0.5;
+            if relaxation < 0.031_25 {
+                break;
             }
-            row_peak
-        })
-        .reduce(|| 0.0, f64::max);
-    if corrected_peak > 1.0 && corrected_peak.is_finite() {
-        -corrected_peak.ln()
-    } else {
-        0.0
+            continue;
+        }
+
+        passes += 1;
+        let improvement = previous - next;
+        previous = next;
+        if next <= TARGET || improvement <= TARGET * 0.01 {
+            break;
+        }
+        relaxation = (relaxation * 1.08_f64).min(0.9_f64);
+    }
+
+    WaveRefinement {
+        passes,
+        initial_max_residual: initial,
+        final_max_residual: previous,
     }
 }
 
@@ -319,10 +430,9 @@ pub(crate) fn build_model<S: PixelSource>(
     let mut gains = if graph_connected {
         solve_tile_gains(layout.tile_count(), &constraints)?
     } else {
-        // Applying a component-wide constant gain when its neighboring
-        // boundary was rejected could create a new seam. Disconnected
-        // analyses therefore leave the coarse gauge neutral; accepted
-        // per-position evidence is still reconstructed by the pixel solve.
+        // A graph gauge cannot cross a rejected boundary without inventing a
+        // relationship. Disconnected analyses therefore use neutral gauges;
+        // accepted per-position evidence still creates symmetric local waves.
         vec![[0.0; 3]; layout.tile_count()]
     };
     limit_gains(&mut gains, config.strength, config.max_gain_stops);
@@ -333,8 +443,12 @@ pub(crate) fn build_model<S: PixelSource>(
         if !analysis.accepted(config) {
             continue;
         }
-        let global_difference = sub(gains[analysis.tile_b], gains[analysis.tile_a]);
-        let field = make_local_field(analysis, global_difference, config);
+        let field = make_local_field(
+            analysis,
+            gains[analysis.tile_a],
+            gains[analysis.tile_b],
+            config,
+        );
         match analysis.orientation {
             Orientation::Vertical => {
                 let seam_index = layout
@@ -363,14 +477,13 @@ pub(crate) fn build_model<S: PixelSource>(
         .iter()
         .chain(horizontal.iter())
         .flatten()
-        .map(|field| field.profile.len() as u64)
+        .map(|field| field.target_difference.len() as u64)
         .sum::<u64>();
-    let ghost = if accepted > 0 && config.local_strength > 0.0 {
-        let field = build_global_ghost(&layout, &vertical, &horizontal)?;
-        close_projected_residuals(&field, &mut vertical, &mut horizontal, config);
-        Some(field)
+    let max_log_gain = config.max_gain_stops.max(0.0) * LN_2;
+    let refinement = if accepted > 0 {
+        refine_wave_fields(&layout, &mut vertical, &mut horizontal, max_log_gain)
     } else {
-        None
+        WaveRefinement::default()
     };
 
     let mut warnings = Vec::new();
@@ -387,27 +500,10 @@ pub(crate) fn build_model<S: PixelSource>(
     }
     if accepted > 0 && !graph_connected {
         warnings.push(
-            "Accepted constraints do not connect every tile; global tile gains were disabled while accepted full-resolution seam constraints remained active."
+            "Accepted constraints do not connect every tile; graph endpoint gauges were disabled while accepted midpoint-anchored seam waves remained active."
                 .to_owned(),
         );
     }
-    if config.blend_width > 0 {
-        let x_edges = layout.x_edges();
-        let y_edges = layout.y_edges();
-        let narrowest = x_edges
-            .windows(2)
-            .chain(y_edges.windows(2))
-            .map(|edge| edge[1] - edge[0])
-            .min()
-            .unwrap_or(0);
-        if config.blend_width.saturating_mul(2) > narrowest {
-            warnings.push(
-                "Local correction ramps overlap because blend width exceeds half a tile; the combined gain remains clamped."
-                    .to_owned(),
-            );
-        }
-    }
-
     let tile_gains = gains
         .iter()
         .enumerate()
@@ -426,15 +522,15 @@ pub(crate) fn build_model<S: PixelSource>(
     let output_pixels = u64::from(image.width) * u64::from(image.height);
     let tile_count = layout.tile_count() as u64;
     let report = CorrectionReport {
-        version: 2,
+        version: 3,
         image,
         layout,
         config: config.clone(),
         boundaries,
         tile_gains,
         field: FieldReport {
-            strategy: if ghost.is_some() {
-                "global_neumann_poisson_dct_with_exact_boundary_closure".to_owned()
+            strategy: if accepted > 0 {
+                "tile_laplacian_midpoint_anchored_raised_cosine".to_owned()
             } else {
                 "disabled".to_owned()
             },
@@ -442,33 +538,25 @@ pub(crate) fn build_model<S: PixelSource>(
             seam_impulses,
             conceptual_tile_relationships: tile_count.saturating_mul(tile_count),
             output_pixels,
-            stored_field_bytes: if ghost.is_some() {
-                output_pixels.saturating_mul(3 * size_of::<f64>() as u64)
-            } else {
-                0
-            },
+            stored_field_bytes: seam_impulses
+                .saturating_mul(3)
+                .saturating_mul(size_of::<Rgb>() as u64),
             headroom_shift_stops: 0.0,
+            neutral_interior_anchors: tile_count,
+            refinement_passes: refinement.passes,
+            initial_max_residual_stops: refinement.initial_max_residual / LN_2,
+            final_max_residual_stops: refinement.final_max_residual / LN_2,
         },
         warnings,
         applied: accepted > 0,
     };
 
-    let mut model = CorrectionModel {
+    Ok(CorrectionModel {
         report,
-        gains,
-        ghost,
         vertical,
         horizontal,
-        max_log_gain: config.max_gain_stops.max(0.0) * LN_2,
-        headroom_log_offset: 0.0,
-    };
-    if model.report.applied {
-        model.headroom_log_offset = with_threads(config.threads, || {
-            Ok(compute_headroom_offset(source, &model))
-        })?;
-        model.report.field.headroom_shift_stops = model.headroom_log_offset / LN_2;
-    }
-    Ok(model)
+        max_log_gain,
+    })
 }
 
 fn constraint_graph_connected(tile_count: usize, constraints: &[GainConstraint]) -> bool {
@@ -773,7 +861,8 @@ fn sample_boundary<S: PixelSource>(
 
 fn make_local_field(
     analysis: &BoundaryAnalysis,
-    global_difference: Rgb,
+    gain_a: Rgb,
+    gain_b: Rgb,
     config: &CorrectionConfig,
 ) -> LocalField {
     let length = usize::try_from(analysis.segment_end - analysis.segment_start)
@@ -796,11 +885,11 @@ fn make_local_field(
         known.push((
             usize::try_from(sample.position - analysis.segment_start)
                 .expect("profile position fits usize"),
-            add(stabilized, global_difference),
+            stabilized,
         ));
     }
 
-    let fallback = add(estimate.center, global_difference);
+    let fallback = estimate.center;
     let mut profile = vec![fallback; length];
     if let Some(&(first_position, first_value)) = known.first() {
         profile[..first_position.min(length)].fill(first_value);
@@ -828,11 +917,36 @@ fn make_local_field(
         *value = value.map(|channel| channel.clamp(-residual_limit, residual_limit));
     }
 
+    // The sparse tile Laplacian supplies globally consistent endpoint gauges,
+    // but those gauges are never broadcast across a complete tile. For every
+    // scanline sample, split the remaining mismatch between the two sides and
+    // later decay each endpoint independently to the tile's neutral midpoint.
+    let graph_difference = sub(gain_b, gain_a);
+    let local_strength = config.local_strength.clamp(0.0, 2.0);
+    let endpoint_limit = config.max_gain_stops.max(0.0) * LN_2;
+    let mut target_difference = Vec::with_capacity(profile.len());
+    let mut side_a = Vec::with_capacity(profile.len());
+    let mut side_b = Vec::with_capacity(profile.len());
+    for jump in profile {
+        let residual = add(jump, graph_difference);
+        let half_residual = scale(residual, 0.5 * local_strength);
+        let before = clamp_profile(add(gain_a, half_residual), endpoint_limit);
+        let after = clamp_profile(sub(gain_b, half_residual), endpoint_limit);
+        target_difference.push(add(
+            scale(graph_difference, 1.0 - local_strength),
+            scale(jump, -local_strength),
+        ));
+        side_a.push(before);
+        side_b.push(after);
+    }
+
     LocalField {
         coordinate: analysis.coordinate,
         segment_start: analysis.segment_start,
         segment_end: analysis.segment_end,
-        profile,
+        target_difference,
+        side_a,
+        side_b,
     }
 }
 
@@ -964,7 +1078,20 @@ mod tests {
     }
 
     #[test]
-    fn recovers_a_step_without_mistaking_a_linear_gradient_for_it() {
+    fn seam_wave_is_full_at_the_join_and_zero_at_tile_midpoints() {
+        let seam = 4096;
+        assert_eq!(midpoint_wave(seam - 1, seam, 0, true), 1.0);
+        assert_eq!(midpoint_wave(seam, seam, 8192, false), 1.0);
+        assert_eq!(midpoint_wave(2048, seam, 0, true), 0.0);
+        assert_eq!(midpoint_wave(6144, seam, 8192, false), 0.0);
+        assert_eq!(midpoint_wave(1024, seam, 0, true), 0.0);
+        assert_eq!(midpoint_wave(7168, seam, 8192, false), 0.0);
+        assert!(midpoint_wave(3072, seam, 0, true) > 0.0);
+        assert!(midpoint_wave(5120, seam, 8192, false) > 0.0);
+    }
+
+    #[test]
+    fn recovers_a_step_while_leaving_tile_interiors_native() {
         let source = Synthetic {
             width: 256,
             height: 128,
@@ -998,10 +1125,17 @@ mod tests {
             },
         )
         .unwrap();
-        let left = model.log_gain_at(20, 64)[0];
-        let right = model.log_gain_at(220, 64)[0];
+        // The central anchor of each tile and its outer half retain the source
+        // value; the reconciled graph correction exists only as a seam wave.
+        assert_eq!(model.log_gain_at(20, 64), [0.0; 3]);
+        assert_eq!(model.log_gain_at(220, 64), [0.0; 3]);
+        let seam = source.width / 2;
+        let left = model.log_gain_at(seam - 1, 64)[0];
+        let right = model.log_gain_at(seam, 64)[0];
         assert_abs_diff_eq!(right - left, -1.1_f64.ln(), epsilon = 0.01);
         assert!(model.report.boundaries[0].accepted);
+        assert_eq!(model.report.field.headroom_shift_stops, 0.0);
+        assert_eq!(model.report.field.neutral_interior_anchors, 2);
     }
 
     #[test]
@@ -1123,6 +1257,10 @@ mod tests {
         assert_eq!(model.report.layout.tile_count(), 12);
         assert_eq!(model.report.boundaries.len(), 17);
         assert!(model.report.boundaries.iter().all(|item| item.accepted));
+        assert!(
+            model.report.field.final_max_residual_stops
+                <= model.report.field.initial_max_residual_stops + 1.0e-12
+        );
 
         for x in [100, 200] {
             for y in [50, 150, 250, 350] {
