@@ -1,5 +1,28 @@
 # Native CLI
 
+## Direct interface
+
+For a known concatenate line, no subcommand or grid declaration is needed:
+
+```bash
+seamingly-epic --x 4096 --y 4096 --in myfile.png --out fixed.png
+```
+
+Comma-separated lines dynamically define the regions. Two X lines and one Y
+line form a 3x2 adjacency graph with six regions:
+
+```bash
+seamingly-epic --x 3084,5887 --y 4096 --in myfile.png --out fixed.png
+```
+
+Each vertical line is scanwalked at every Y position within every row region,
+and each horizontal line at every X position within every column region. All
+accepted neighboring deltas are solved together. The resulting position-varying
+profiles become smooth per-pixel correction fields on both sides of every join.
+Direct coordinates are exact and do not search nearby pixels. Use the advanced
+`correct` subcommand when coordinate refinement or tuning is intentionally
+wanted.
+
 ## Commands
 
 `analyze` decodes and measures the image but never writes corrected pixels. Its
@@ -56,12 +79,12 @@ Coordinates refer to the assembled output, not the original tile size.
 | Flag | Default | Purpose |
 | --- | ---: | --- |
 | `--scan-radius` | 8 | Width of each near/far analysis strip. |
-| `--refine-radius` | 2 | Search around a nominal coordinate; use `0` for an exact locked line. |
-| `--sample-stride` | 4 | Boundary sampling interval. Lower values inspect more pixels. |
+| `--refine-radius` | 0 | Keep the supplied concatenate line exact; increase only when an earlier crop/resize may have shifted it. |
+| `--sample-stride` | 1 | Boundary sampling interval. The default inspects every row/column along every segment. |
 | `--blend-width` | 192 | Raised-cosine distance for the local residual field. |
 | `--profile-smooth-radius` | 96 | Low-pass radius along the one-dimensional correction profile. It never blurs source pixels. |
 | `--strength` | 1.0 | Global tile-gain multiplier. |
-| `--local-strength` | 0.65 | Bounded near-seam residual multiplier. |
+| `--local-strength` | 1.0 | Bounded position-varying residual multiplier. |
 | `--max-gain-stops` | 0.75 | Hard per-channel gain limit. |
 | `--min-confidence` | 0.18 | Reject boundary segments below this score. |
 | `--transfer` | `srgb` | Interpret samples as `srgb` or already `linear`. |
@@ -107,9 +130,11 @@ volume is unsuitable. The Streaming PNG node is preferable for extreme sizes.
 
 ## PNG support
 
-Supported inputs are non-interlaced, non-animated 8/16-bit grayscale, gray
-alpha, RGB, and RGBA PNGs. Indexed PNGs and `tRNS` transparency must first be
-expanded to RGB/RGBA so transparency remains unambiguous during correction.
+Supported inputs are non-interlaced, non-animated grayscale, gray-alpha, RGB,
+and RGBA PNGs with 8- or 16-bit samples per channel. In conventional total-pixel
+terminology this includes RGB24, RGBA32, RGB48, and RGBA64. Indexed PNGs and
+`tRNS` transparency must first be expanded to RGB/RGBA so transparency remains
+unambiguous during correction.
 
 Alpha bytes are never changed. Recognized standard PNG color, ICC, EXIF, text,
 and ComfyUI metadata chunks are carried into the output. Unknown private chunks

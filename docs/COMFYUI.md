@@ -8,10 +8,15 @@ have been concatenated. For the standard 8192x8192 result:
 1. Connect the assembled `IMAGE`.
 2. Leave `grid_columns=2` and `grid_rows=2`.
 3. Leave X/Y strings empty; the node derives `4096` on both axes.
-4. Start with `refine_radius=0` when the concatenate coordinate is exact. Use
-   the default `2` only when a prior crop/resize may have shifted the line.
+4. Leave `refine_radius=0` when the concatenate coordinate is exact. Increase
+   it only when a prior crop/resize may have shifted the line.
 5. Inspect `correction_area` and `report_json`. A rejected segment is left
    unchanged.
+
+The default `sample_stride=1` scanwalks every Y position on vertical segments
+and every X position on horizontal segments. The native engine then evaluates
+the combined global and position-varying correction field for every output
+pixel.
 
 The IMAGE path writes the tensor as little-endian float32, invokes the Rust
 engine without a shell, and reads float32 back. It never quantizes through an
@@ -19,7 +24,9 @@ engine without a shell, and reads float32 back. It never quantizes through an
 this path is convenient rather than memory-minimal.
 
 The correction-area MASK is diagnostic: brightness is the accepted boundary
-confidence multiplied by the same raised-cosine support used by the engine.
+confidence multiplied by the same raised-cosine spatial support used by the
+engine. Confidence gates unreliable segments; it does not attenuate an accepted
+residual and knowingly leave part of it behind.
 
 ## Streaming PNG
 

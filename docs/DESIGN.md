@@ -2,9 +2,10 @@
 
 ## Guarantees and limits
 
-The output PNG is encoded losslessly and keeps the source bit depth. Alpha is
-copied exactly. The correction engine never convolves, resamples, sharpens, or
-denoises the source image.
+The output PNG is encoded losslessly and keeps the source sample depth. RGB24
+and RGBA32 use 8 bits per channel; RGB48 and RGBA64 use 16 bits per channel.
+Alpha is copied exactly. The correction engine never convolves, resamples,
+sharpens, or denoises the source image.
 
 Correction necessarily changes RGB values. "Zero loss" therefore means no
 detail-destroying resampling or lossy encoding—not byte-identical pixels. A
@@ -13,11 +14,12 @@ between independently generated tiles cannot.
 
 ## Boundary model
 
-For each candidate seam, samples are taken in narrow strips on both sides.
-Pixels that are clipped, nearly black, transparent, highly textured, or inconsistent with a
-persistent line are down-weighted. Each side is robustly extrapolated to the
-boundary in log-linear RGB. A multiplicative exposure/white-balance jump becomes
-an additive three-channel offset:
+For each candidate seam, the default scan walks every row of a vertical segment
+or every column of a horizontal segment and samples narrow strips on both sides.
+Pixels that are clipped, nearly black, transparent, highly textured, or
+inconsistent with a persistent line are down-weighted. Each side is robustly
+extrapolated to the boundary in log-linear RGB. A multiplicative
+exposure/white-balance jump becomes an additive three-channel offset:
 
 ```text
 d = log(right_at_boundary) - log(left_at_boundary)
@@ -38,11 +40,18 @@ an unmeasured neighbor.
 
 ## Residual field
 
-After global tile gains, a small remaining boundary profile may vary along the
-seam. A robust one-dimensional profile is smoothed along the boundary, split
-symmetrically between both sides, and faded to zero with a raised-cosine ramp.
-The field changes color/exposure only; source spatial frequencies are never
-filtered.
+After global tile gains, the remaining boundary profile can differ at every
+position along the seam. A robust one-dimensional profile is smoothed along the
+boundary, split symmetrically between both sides, and faded inward with a
+raised-cosine ramp. At an intersection, the X- and Y-derived fields add. The
+engine evaluates this two-dimensional "smokemap" independently for every output
+pixel; only the correction field is smoothed, never the image or its spatial
+detail.
+
+The comparison is not a request to make two neighboring source pixels
+identical. Real scene gradients and edges can cross a tile boundary. Four
+near/far strips are extrapolated to the join so the inferred discontinuity is
+removed while the legitimate local gradient remains.
 
 ## Memory model
 

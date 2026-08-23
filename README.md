@@ -43,8 +43,9 @@ Restart ComfyUI. The nodes appear under `image / seamingly epic`:
 
 - **Seamingly Epic — Native IMAGE**: float32 in/out, correction-area mask, and
   JSON diagnostics. Use it inside an ordinary workflow.
-- **Seamingly Epic — Streaming PNG**: bounded-memory 8/16-bit PNG path. Use it
-  for 8K/16K images that should not become another full Comfy tensor.
+- **Seamingly Epic — Streaming PNG**: bounded-memory
+  RGB24/RGBA32/RGB48/RGBA64 PNG path. Use it for 8K/16K images that should not
+  become another full Comfy tensor.
 - **Seamingly Epic — Reference Repair**: the tutorial's painted-reference
   composite path in one node.
 
@@ -59,6 +60,27 @@ Build directly:
 ```bash
 cargo build --release --locked
 ```
+
+The normal interface is deliberately just input, output, and exact seam lines:
+
+```bash
+seamingly-epic --x 4096 --y 4096 --in myfile.png --out fixed.png
+```
+
+Any number of comma-separated coordinates works. This example creates the six
+regions of an irregular 3-column by 2-row grid and compares every shared edge
+against its actual neighboring regions:
+
+```bash
+seamingly-epic --x 3084,5887 --y 4096 --in myfile.png --out fixed.png
+```
+
+Coordinates in direct mode are exact (`refine_radius=0`). The `analyze` and
+`correct` subcommands retain advanced controls and equal-grid shorthand.
+Every shared edge is scanwalked at every position by default. Its varying
+residual becomes a smooth correction field evaluated independently for every
+output pixel, while the globally solved per-tile gains reconcile all grid
+neighbors and intersections together.
 
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
@@ -88,7 +110,8 @@ requirements, and supported PNG formats.
 
 ## What is and is not preserved
 
-- PNG output remains losslessly encoded at the source 8-bit or 16-bit depth.
+- PNG output remains losslessly encoded at the source per-channel depth:
+  RGB24/RGBA32 use 8-bit channels; RGB48/RGBA64 use 16-bit channels.
 - Explicit alpha samples are copied byte-for-byte.
 - Standard color, text, EXIF, ICC, and ComfyUI workflow/prompt metadata exposed
   by the PNG codec are retained.
@@ -112,10 +135,13 @@ The repository's non-Comfy checks are:
 cargo fmt --all --check
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
+cargo audit
 python -m compileall -q __init__.py nodes.py runtime.py
 cargo build --release --locked
 ```
 
-These checks validate the native implementation and Python syntax. A real
-ComfyUI launch remains the final environment-specific confirmation because the
-custom nodes intentionally depend on ComfyUI's own PyTorch runtime.
+These checks validate the native implementation, Rust advisory graph, and
+Python syntax. There is no project-owned Python dependency graph to audit:
+ComfyUI supplies Python, PyTorch, and NumPy. A real ComfyUI launch remains the
+final environment-specific confirmation because the custom nodes intentionally
+depend on ComfyUI's own runtime.

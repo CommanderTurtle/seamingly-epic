@@ -3,20 +3,24 @@
 - [x] Reconstruct the cited ComfyUI seam-fix workflow and tutorial.
 - [x] Separate photometric seams from semantic/structural tile errors.
 - [x] Choose a single Rust correction engine for the CLI and ComfyUI.
-- [x] Implement lossless PNG decoding/staging with 8-bit and 16-bit support.
+- [x] Implement lossless PNG decoding/staging for RGB24/RGBA32/RGB48/RGBA64.
 - [x] Preserve explicit alpha, bit depth, and recognized color/text/ComfyUI metadata.
 - [x] Parse explicit X/Y seam coordinates and equal-grid shorthand.
+- [x] Add the minimal `--x/--y/--in/--out` interface and verify irregular grids.
+- [x] Verify RGB24/RGBA32/RGB48/RGBA64 sample-depth handling explicitly.
 - [x] Refine nominal grid lines to a materially stronger nearby persistent boundary step.
 - [x] Estimate robust per-channel log-linear boundary offsets.
 - [x] Solve globally consistent per-tile white-balance/exposure gains.
 - [x] Prevent disconnected constraint graphs from creating new tile boundaries.
 - [x] Add confidence gating, correction limits, and a report-only mode.
 - [x] Add smooth local residual correction without spatially filtering image detail.
+- [x] Scanwalk every boundary position and verify a non-uniform per-pixel field.
+- [x] Verify all 17 adjacencies in a 12-tile 3x4 grid.
 - [x] Parallelize analysis/application while keeping PNG encoding bounded in memory.
 - [x] Implement a float32 raw transport for a zero-quantization ComfyUI IMAGE node.
 - [x] Implement a streaming file node for images too large to return as a Comfy tensor.
 - [x] Condense the cited manual reference-mask workflow into one ComfyUI node.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
-- [x] Run final formatting, compilation, Clippy, Python compilation, and source audit.
+- [x] Run final formatting, compilation, Clippy, Python compilation, and dependency audit.
 - [x] Finish focused Git commits and leave the tree clean.
