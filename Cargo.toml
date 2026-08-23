@@ -1,6 +1,6 @@
 [package]
 name = "seamingly-epic"
-version = "0.4.2"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Full-resolution f64 photometric and registered-cross seam repair for independently refined image tiles"

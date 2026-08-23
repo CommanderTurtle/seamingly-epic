@@ -36,6 +36,10 @@
 - [x] Restore unrestricted irregular structural boundaries without a local alpha cap.
 - [x] Match each inner reference to the canonical outer base without altering the base.
 - [x] Preserve base alpha, exact white, metadata, depth, and compression class in `strucfix`.
+- [x] Register an arbitrary even square center render directly from `--x/--y`.
+- [x] Find a circularly continuous, unrestricted star-shaped structural boundary.
+- [x] Match only the center reference to the canonical input and preserve the input outside the star.
+- [x] Add the independent, configuration-free `centerfix` third pass.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
 - [x] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.

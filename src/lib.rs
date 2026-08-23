@@ -1,5 +1,6 @@
 //! Native photometric seam correction for independently generated image tiles.
 
+pub mod centerfix;
 pub mod color;
 pub mod config;
 pub mod engine;
@@ -12,6 +13,7 @@ mod scratch;
 pub mod solve;
 pub mod strucfix;
 
+pub use centerfix::{CenterFixReport, centerfix_png};
 pub use config::{CorrectionConfig, GridSpec, SeamSpec};
 pub use png_io::{analyze_png, correct_png};
 pub use raw_io::correct_raw_f32;

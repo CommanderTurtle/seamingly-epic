@@ -173,6 +173,40 @@ path. It blends only pixel-aligned samples and never performs a spatial filter,
 resize, latent conversion, or lossy encode. The output retains the base PNG's
 sample depth, color type, recognized metadata, and DEFLATE strength class.
 
+## Registered center structural repair
+
+`centerfix` is an independent final compositor. It does not alter the ordinary
+solver or `strucfix`. One even square reference is registered by centering it
+on the supplied base-image `x,y`; for example, a 4096x4096 reference centered
+at `4096,4096` occupies `[2048,6144) x [2048,6144)`.
+
+The base entering this pass is already canonical everywhere except the final
+structural intersection. A sparse same-coordinate comparison first estimates a
+robust global log-linear gain from the center reference to that base. The gain
+is used to normalize structural costs and later becomes the center value of the
+reference-only photometric field. It is never applied to the base.
+
+The engine evaluates up to 8192 radial scanlines. Along every angle it searches
+from one quarter of the reference half-span to the safe physical margin. Cost
+is averaged across a five-pixel tangent and combines corresponding log color
+with a larger-weight local-gradient term. Circular median and repeated circular
+low-pass operations produce a star-shaped radius `R(theta)` whose samples and
+first/last angular neighborhoods are continuous.
+
+At each boundary position, two radial bands outside the star are measured from
+the canonical base and two inside are measured from the center reference. The
+same near/far extrapolation used by the other native paths produces a one-way
+reference-to-base gain. Robust angular stabilization removes texture outliers.
+The gain field interpolates smoothly from the global center estimate to this
+boundary profile; only reference RGB is transformed.
+
+A raised-cosine radial alpha is one at the center and exactly zero at
+`R(theta)`. The compositor is consequently a partition of unity between the
+center reference and canonical base. The base is sample-exact outside the star,
+exact source-white channels are retained, and no rectangular or circular hard
+edge exists. Like `strucfix`, the pass samples corresponding pixels only and
+performs no resize, warp, convolution, latent conversion, or lossy encoding.
+
 ## Tutorial-derived reference repair
 
 The separate Reference Repair node intentionally does spatial work: it resizes

@@ -43,6 +43,21 @@ the horizontal `--y` join. `--ycross` spans the Y axis and repairs the vertical
 `--x` join. The command validates those dimensions and placements exactly and
 never guesses, resizes, or geometrically aligns a reference.
 
+If only the exact cross intersection still needs alternate structural
+evidence, a third independent pass accepts one seam-free center render:
+
+```powershell
+.\target\release\seamingly-epic.exe centerfix `
+  --x 4096 --y 4096 `
+  --in "D:\outputfinal.png" --out "D:\outputlast.png" `
+  --center "D:\middle.png"
+```
+
+Here `--x/--y` are the reference center, just as they are the authoritative
+intersection in the earlier commands. A 4096x4096 `middle.png` centered at
+`4096,4096` therefore registers at `(2048,2048)` in an 8192x8192 base. The
+reference is never resized or aligned heuristically.
+
 Any number of comma-separated X and Y coordinates automatically defines the
 tiles and every true shared boundary. No grid dimensions, adjacency depth,
 sampling plan, or correction strength has to be supplied.
@@ -178,7 +193,7 @@ live in a temporary memory map; compact endpoint profiles remain in memory.
 Only PNG decode/encode is inherently sequential. No GPU runtime, model, tensor
 conversion, or reduced precision is introduced.
 
-The project provides three complementary repairs:
+The project provides four complementary repairs:
 
 - **Native photometric correction** measures persistent boundary steps in
   linear light, solves globally consistent seam-endpoint gauges, and applies
@@ -192,6 +207,12 @@ The project provides three complementary repairs:
   orthogonal-seam-aware weighting at their central overlap.
   This is the automatic path for fingers, edges, and other geometry that was
   generated differently on opposite sides of the original four-tile join.
+- **Registered Center Structural Fix** is an optional third native pass for the
+  one location where both cross references meet. Thousands of radial
+  scanlines form a smooth star-shaped boundary around the center. The
+  seam-free middle render is globally and boundary-matched to the authoritative
+  input, remains opaque at the center, and fades to exact zero at that boundary.
+  Nothing outside the star is changed.
 - **Original SeamFix 2.1 workflow for ComfyUI** preserves Rob Adams' complete
   [45-node tutorial graph](https://www.youtube.com/watch?v=V-ASlpPI87Y),
   including both painted Softfix and HardFix lanes. Focused compatibility
@@ -355,6 +376,52 @@ symmetrically. No rectangular paste boundary is created. Outside the irregular
 cross, the corrected base samples remain byte-for-byte unchanged. The four
 `*_stitch` ranges in the JSON report describe those structural boundaries.
 
+### Registered center structural pass
+
+Do not replace either preceding pass. Run this only after `strucfix` when the
+single cross intersection still needs the independently generated center crop:
+
+```powershell
+.\target\release\seamingly-epic.exe centerfix `
+  --x 4096 --y 4096 `
+  --in "D:\outputfinal.png" --out "D:\outputlast.png" `
+  --center "D:\middle.png"
+```
+
+For the standard case, `middle.png` is the 4096x4096 PiD result made from the
+centered `(512,512,1024,1024)` source crop. Its registration origin in the
+8192x8192 image is `(2048,2048)`. Other even square center renders work the
+same way: their dimensions and `--x/--y` determine placement without scaling.
+`--mid` is accepted as an alias for `--center`.
+
+The engine first obtains a robust global log-linear gain from sparse
+same-coordinate comparisons. This changes only the reference and removes its
+overall exposure/white-balance offset before structural matching. It then
+searches outward on thousands of radial scanlines for the lowest
+base/reference structural difference. Circular median and low-pass passes turn
+those distances into one smooth, irregular star boundary without an angular
+start/end seam.
+
+At every point on the star, two outer near/far bands come from the canonical
+`--in` image and two inner near/far bands come from `--center`. The canonical
+extrapolation maps only the reference to the base. That angular boundary gain
+is smoothed and joined to the robust center gain; it never becomes a gain on
+the input image. For radius `r`, angle `theta`, and detected star radius
+`R(theta)`, reference opacity is
+
+$$
+\alpha(r,\theta)=
+\begin{cases}
+\tfrac12[1+\cos(\pi r/R(\theta))],&0\le r<R(\theta),\\
+0,&r\ge R(\theta).
+\end{cases}
+$$
+
+The seam-free reference is effectively opaque at dead center and becomes
+exactly transparent at its data-derived edge. The already-perfect
+`outputfinal.png` remains authoritative outside that edge. The pass performs
+no resize, warp, spatial filter, or second correction of the base.
+
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
 ```bash
@@ -400,7 +467,8 @@ requirements, and supported PNG formats.
 - The ordinary photometric path never filters, mixes, or resamples spatial
   detail. `strucfix` intentionally mixes only same-coordinate samples from the
   registered overlap renders; it still performs no resize, warp, convolution,
-  denoise, or lossy encode.
+  denoise, or lossy encode. `centerfix` follows the same preservation contract
+  with one registered center render.
 - Every inferred normal wave is exactly zero at its tile midpoint, there is no
   image-wide exposure shift, and exact source-white channels remain white.
 
@@ -412,8 +480,10 @@ smaller corrected PNG is still lossless; the meaningful invariants are sample
 depth, color type, alpha, recognized metadata, dimensions, and pixel values.
 An exposure/white-balance discontinuity is suitable for the ordinary native
 engine. An object split or double edge can use `strucfix` when the two shifted
-overlap renders exist; otherwise it belongs in the painted Reference Repair
-workflow or another generative edit.
+overlap renders exist; the optional `centerfix` pass consumes the final
+seam-free middle render when the cross intersection alone remains unresolved.
+Other semantic damage belongs in the painted Reference Repair workflow or
+another generative edit.
 
 The method and its limits are documented in [docs/DESIGN.md](docs/DESIGN.md).
 The video reconstruction, timestamps, and scientific references are recorded

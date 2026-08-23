@@ -3,7 +3,8 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use seamingly_epic::{
-    CorrectionConfig, GridSpec, SeamSpec, analyze_png, correct_png, correct_raw_f32, strucfix_png,
+    CorrectionConfig, GridSpec, SeamSpec, analyze_png, centerfix_png, correct_png, correct_raw_f32,
+    strucfix_png,
 };
 use serde::Serialize;
 
@@ -115,6 +116,35 @@ enum Command {
         #[arg(long)]
         overwrite: bool,
         /// Also save the structural JSON report.
+        #[arg(long, value_name = "JSON")]
+        report: Option<PathBuf>,
+    },
+    /// Replace only the unresolved center with one registered, seam-free render.
+    Centerfix {
+        /// Structurally repaired PNG from the registered-cross pass.
+        #[arg(long = "in", short = 'i', visible_alias = "input", value_name = "PNG")]
+        input: PathBuf,
+        /// Final center-repaired PNG.
+        #[arg(
+            long = "out",
+            short = 'o',
+            visible_alias = "output",
+            value_name = "PNG"
+        )]
+        output: PathBuf,
+        /// Center X coordinate in base-image pixels.
+        #[arg(long, value_parser = parse_coordinate)]
+        x: u32,
+        /// Center Y coordinate in base-image pixels.
+        #[arg(long, value_parser = parse_coordinate)]
+        y: u32,
+        /// Seam-free center render, centered exactly on --x/--y.
+        #[arg(long, visible_alias = "mid", value_name = "PNG")]
+        center: PathBuf,
+        /// Replace an existing output after the new PNG encodes successfully.
+        #[arg(long)]
+        overwrite: bool,
+        /// Also save the center-repair JSON report.
         #[arg(long, value_name = "JSON")]
         report: Option<PathBuf>,
     },
@@ -255,6 +285,18 @@ fn run() -> Result<()> {
             report,
         }) => {
             let result = strucfix_png(input, output, xcross, ycross, x, y, overwrite)?;
+            emit_json(&result, report.as_ref())?;
+        }
+        Some(Command::Centerfix {
+            input,
+            output,
+            x,
+            y,
+            center,
+            overwrite,
+            report,
+        }) => {
+            let result = centerfix_png(input, output, center, x, y, overwrite)?;
             emit_json(&result, report.as_ref())?;
         }
         Some(Command::RawF32 { descriptor }) => {
@@ -410,5 +452,65 @@ mod tests {
             }
             _ => panic!("strucfix subcommand was not parsed"),
         }
+    }
+
+    #[test]
+    fn parses_the_registered_center_structural_interface() {
+        let cli = Cli::try_parse_from([
+            "seamingly-epic",
+            "centerfix",
+            "--x",
+            "4096",
+            "--y",
+            "4096",
+            "--in",
+            "outputfinal.png",
+            "--out",
+            "outputlast.png",
+            "--center",
+            "middle.png",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Centerfix {
+                x,
+                y,
+                input,
+                output,
+                center,
+                ..
+            }) => {
+                assert_eq!(x, 4096);
+                assert_eq!(y, 4096);
+                assert_eq!(input, PathBuf::from("outputfinal.png"));
+                assert_eq!(output, PathBuf::from("outputlast.png"));
+                assert_eq!(center, PathBuf::from("middle.png"));
+            }
+            _ => panic!("centerfix subcommand was not parsed"),
+        }
+    }
+
+    #[test]
+    fn parses_the_mid_alias_for_the_center_reference() {
+        let cli = Cli::try_parse_from([
+            "seamingly-epic",
+            "centerfix",
+            "--x",
+            "4096",
+            "--y",
+            "4096",
+            "--in",
+            "outputfinal.png",
+            "--out",
+            "outputlast.png",
+            "--mid",
+            "middle.png",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Centerfix { center, .. })
+                if center.as_path() == std::path::Path::new("middle.png")
+        ));
     }
 }

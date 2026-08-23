@@ -88,6 +88,31 @@ to the outer `--in` image. The base is read-only: pixels outside the dynamic
 alpha wave come directly from `--in`, and its RGB is never corrected by
 `strucfix`.
 
+`centerfix` is an optional third pass. It leaves both earlier commands
+unchanged and replaces only the unresolved cross intersection with one
+registered, seam-free center render:
+
+```powershell
+seamingly-epic centerfix --x 4096 --y 4096 `
+  --in outputfinal.png --out outputlast.png `
+  --center middle.png
+```
+
+`--x/--y` specify the reference center in base-image coordinates. For an
+8192x8192 base, a 4096x4096 reference centered at `4096,4096` is therefore
+registered at `(2048,2048)`. More generally, `--center` may be any even square
+PNG of at least 64 pixels that fits when centered on the supplied coordinates.
+`--mid` is an equivalent alias. The reference is never resized, warped, or
+automatically registered.
+
+The command derives a circularly continuous star-shaped structural boundary
+from thousands of radial base/reference comparisons. The center reference is
+matched globally and again at the irregular boundary, always in the one-way
+reference-to-base direction. Its opacity is full at the center and reaches
+exact zero at the star. Pixels beyond it come directly from `--in`; the input
+never receives another photometric correction. There are no radius, feather,
+strength, or registration tuning flags.
+
 `raw-f32` is the machine interface used by the ComfyUI IMAGE node. It consumes
 a JSON descriptor for little-endian, contiguous `[B,H,W,C]` float32 files. It is
 documented so other local tools can use the same zero-quantization path, but
@@ -195,6 +220,11 @@ standard RGB8 8192x8192 + 8192x4096 + 4096x8192 geometry therefore stages about
 384 MiB of source samples. Four `f64` distance curves and twelve compact gain
 profiles scale only with image width/height. Candidate matching and final rows
 run in parallel on Rayon's platform pool; PNG decode and encode remain serial.
+
+`centerfix` memory-maps the base and center reference concurrently. The
+standard RGB8 8192x8192 + 4096x4096 geometry stages about 240 MiB. Its compact
+radius and gain profiles scale with the automatically selected angular
+scanline count, capped at 8192; radial matching and final rows use Rayon.
 
 ## PNG support
 
