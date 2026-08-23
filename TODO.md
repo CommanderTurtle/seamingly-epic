@@ -28,5 +28,5 @@
 - [x] Condense the cited manual reference-mask workflow into one ComfyUI node.
 - [x] Add setup/build scripts for Windows and Linux.
 - [x] Document exact 2x2 PiD usage for 8192x8192 output.
-- [ ] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.
+- [x] Run final formatting, compilation, Clippy, Python compilation, release build, and dependency audit.
 - [x] Finish focused Git commits and leave the tree clean.
