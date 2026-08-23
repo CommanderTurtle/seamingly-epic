@@ -3,9 +3,9 @@ use std::{fs, path::PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use seamingly_epic::{
-    CorrectionConfig, GridSpec, SeamSpec, analyze_png, correct_png, correct_raw_f32,
-    report::CorrectionReport,
+    CorrectionConfig, GridSpec, SeamSpec, analyze_png, correct_png, correct_raw_f32, strucfix_png,
 };
+use serde::Serialize;
 
 #[derive(Parser)]
 #[command(
@@ -84,6 +84,38 @@ enum Command {
         overwrite: bool,
         /// Also save the complete JSON analysis report.
         #[arg(long)]
+        report: Option<PathBuf>,
+    },
+    /// Replace structure at one X/Y join with registered landscape/portrait overlap renders.
+    Strucfix {
+        /// Corrected base PNG from the ordinary photometric pass.
+        #[arg(long = "in", short = 'i', visible_alias = "input", value_name = "PNG")]
+        input: PathBuf,
+        /// Final structurally repaired PNG.
+        #[arg(
+            long = "out",
+            short = 'o',
+            visible_alias = "output",
+            value_name = "PNG"
+        )]
+        output: PathBuf,
+        /// Exact vertical seam in base-image pixels.
+        #[arg(long, value_parser = parse_coordinate)]
+        x: u32,
+        /// Exact horizontal seam in base-image pixels.
+        #[arg(long, value_parser = parse_coordinate)]
+        y: u32,
+        /// Landscape overlap render; spans X and repairs the horizontal seam.
+        #[arg(long, value_name = "PNG")]
+        xcross: PathBuf,
+        /// Portrait overlap render; spans Y and repairs the vertical seam.
+        #[arg(long, value_name = "PNG")]
+        ycross: PathBuf,
+        /// Replace an existing output after the new PNG encodes successfully.
+        #[arg(long)]
+        overwrite: bool,
+        /// Also save the structural JSON report.
+        #[arg(long, value_name = "JSON")]
         report: Option<PathBuf>,
     },
     /// Process a little-endian [B,H,W,C] float32 descriptor (used by ComfyUI).
@@ -212,6 +244,19 @@ fn run() -> Result<()> {
             let result = correct_png(input, output, &settings.config(), overwrite)?;
             emit_json(&result, report.as_ref())?;
         }
+        Some(Command::Strucfix {
+            input,
+            output,
+            x,
+            y,
+            xcross,
+            ycross,
+            overwrite,
+            report,
+        }) => {
+            let result = strucfix_png(input, output, xcross, ycross, x, y, overwrite)?;
+            emit_json(&result, report.as_ref())?;
+        }
         Some(Command::RawF32 { descriptor }) => {
             let reports = correct_raw_f32(descriptor)?;
             println!(
@@ -248,7 +293,7 @@ fn run_direct(direct: Direct) -> Result<()> {
     emit_json(&result, direct.report.as_ref())
 }
 
-fn emit_json(report: &CorrectionReport, destination: Option<&PathBuf>) -> Result<()> {
+fn emit_json<T: Serialize>(report: &T, destination: Option<&PathBuf>) -> Result<()> {
     let json = serde_json::to_string_pretty(report).context("could not serialize report")?;
     if let Some(path) = destination {
         ensure!(!path.as_os_str().is_empty(), "report path cannot be empty");
@@ -325,5 +370,45 @@ mod tests {
         assert_eq!(cli.direct.y, [4096]);
         assert_eq!(cli.direct.input, Some(PathBuf::from("myfile.png")));
         assert_eq!(cli.direct.output, Some(PathBuf::from("fixed.png")));
+    }
+
+    #[test]
+    fn parses_the_registered_cross_structural_interface() {
+        let cli = Cli::try_parse_from([
+            "seamingly-epic",
+            "strucfix",
+            "--x",
+            "4096",
+            "--y",
+            "4096",
+            "--in",
+            "corrected.png",
+            "--out",
+            "final.png",
+            "--xcross",
+            "landscape.png",
+            "--ycross",
+            "portrait.png",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Command::Strucfix {
+                x,
+                y,
+                input,
+                output,
+                xcross,
+                ycross,
+                ..
+            }) => {
+                assert_eq!(x, 4096);
+                assert_eq!(y, 4096);
+                assert_eq!(input, PathBuf::from("corrected.png"));
+                assert_eq!(output, PathBuf::from("final.png"));
+                assert_eq!(xcross, PathBuf::from("landscape.png"));
+                assert_eq!(ycross, PathBuf::from("portrait.png"));
+            }
+            _ => panic!("strucfix subcommand was not parsed"),
+        }
     }
 }

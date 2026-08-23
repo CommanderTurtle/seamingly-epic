@@ -3,6 +3,7 @@ use std::{
     fs::{self, File},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use anyhow::{Context, Result, bail, ensure};
@@ -40,23 +41,7 @@ pub fn correct_png(
 ) -> Result<CorrectionReport> {
     let input = input.as_ref();
     let output = output.as_ref();
-    ensure!(input != output, "input and output paths must be different");
-    if output.exists() {
-        ensure!(
-            fs::canonicalize(input).with_context(|| {
-                format!("could not resolve input path: {}", input.display())
-            })? != fs::canonicalize(output).with_context(|| {
-                format!("could not resolve output path: {}", output.display())
-            })?,
-            "input and output resolve to the same file"
-        );
-    }
-    if output.exists() && !overwrite {
-        bail!(
-            "output already exists: {} (pass --overwrite to replace it)",
-            output.display()
-        );
-    }
+    validate_output_target(input, output, overwrite)?;
 
     let mut stage = PngStage::decode(input)?;
     let model = {
@@ -75,7 +60,7 @@ pub fn correct_png(
     Ok(model.report)
 }
 
-struct PngStage {
+pub(crate) struct PngStage {
     _file: File,
     pixels: MmapMut,
     info: Info<'static>,
@@ -86,7 +71,7 @@ struct PngStage {
 }
 
 impl PngStage {
-    fn decode(path: &Path) -> Result<Self> {
+    pub(crate) fn decode(path: &Path) -> Result<Self> {
         let source_deflate_level = source_deflate_level(path)?;
         let input = File::open(path)
             .with_context(|| format!("could not open input PNG: {}", path.display()))?;
@@ -150,7 +135,7 @@ impl PngStage {
         })
     }
 
-    fn image_report(&self) -> ImageReport {
+    pub(crate) fn image_report(&self) -> ImageReport {
         ImageReport {
             width: self.info.width,
             height: self.info.height,
@@ -246,7 +231,7 @@ impl PngStage {
             .context("could not flush corrected pixel store")
     }
 
-    fn encode(&self, output: &Path, overwrite: bool) -> Result<()> {
+    pub(crate) fn encode(&self, output: &Path, overwrite: bool) -> Result<()> {
         let parent = absolute_parent(output)?;
         fs::create_dir_all(&parent)
             .with_context(|| format!("could not create output directory: {}", parent.display()))?;
@@ -280,6 +265,135 @@ impl PngStage {
 
         publish_temporary(temporary, output, overwrite)
     }
+
+    #[must_use]
+    pub(crate) fn dimensions(&self) -> (u32, u32) {
+        (self.info.width, self.info.height)
+    }
+
+    /// Transform visible RGB samples in place while preserving source alpha,
+    /// channel depth, metadata, and the original encoded value of unchanged
+    /// pixels. The callback receives and returns linear-light RGB.
+    pub(crate) fn map_linear_rgb<F>(
+        &mut self,
+        transfer: TransferFunction,
+        threads: usize,
+        transform: F,
+    ) -> Result<u64>
+    where
+        F: Fn(u32, u32, Rgb) -> Rgb + Sync,
+    {
+        let row_bytes = self.row_bytes;
+        let width = self.info.width;
+        let color_type = self.info.color_type;
+        let bit_depth = self.info.bit_depth;
+        let channels = self.channels;
+        let bytes_per_sample = self.bytes_per_sample;
+        let changed = AtomicU64::new(0);
+
+        with_threads(threads, || {
+            self.pixels
+                .par_chunks_mut(row_bytes)
+                .enumerate()
+                .for_each(|(y, row)| {
+                    for x in 0..width as usize {
+                        let pixel_offset = x * channels * bytes_per_sample;
+                        if has_alpha(color_type) {
+                            let alpha = read_sample(
+                                row,
+                                pixel_offset + (channels - 1) * bytes_per_sample,
+                                bit_depth,
+                            );
+                            if alpha <= 1.0 / 255.0 {
+                                continue;
+                            }
+                        }
+
+                        let original = match color_type {
+                            ColorType::Grayscale | ColorType::GrayscaleAlpha => {
+                                let value = decode_sample(
+                                    read_sample(row, pixel_offset, bit_depth),
+                                    transfer,
+                                );
+                                [value; 3]
+                            }
+                            ColorType::Rgb | ColorType::Rgba => std::array::from_fn(|channel| {
+                                decode_sample(
+                                    read_sample(
+                                        row,
+                                        pixel_offset + channel * bytes_per_sample,
+                                        bit_depth,
+                                    ),
+                                    transfer,
+                                )
+                            }),
+                            ColorType::Indexed => unreachable!("indexed PNG was rejected"),
+                        };
+                        let transformed = transform(x as u32, y as u32, original);
+                        if !transformed.iter().all(|value| value.is_finite()) {
+                            continue;
+                        }
+
+                        let mut pixel_changed = false;
+                        match color_type {
+                            ColorType::Grayscale | ColorType::GrayscaleAlpha => {
+                                let value =
+                                    (transformed[0] + transformed[1] + transformed[2]) / 3.0;
+                                let encoded = encode_sample(value, transfer);
+                                let before = read_sample(row, pixel_offset, bit_depth);
+                                write_sample(row, pixel_offset, bit_depth, encoded);
+                                let after = read_sample(row, pixel_offset, bit_depth);
+                                pixel_changed = before != after;
+                            }
+                            ColorType::Rgb | ColorType::Rgba => {
+                                for (channel, value) in transformed.iter().copied().enumerate() {
+                                    let offset = pixel_offset + channel * bytes_per_sample;
+                                    let before = read_sample(row, offset, bit_depth);
+                                    write_sample(
+                                        row,
+                                        offset,
+                                        bit_depth,
+                                        encode_sample(value, transfer),
+                                    );
+                                    let after = read_sample(row, offset, bit_depth);
+                                    pixel_changed |= before != after;
+                                }
+                            }
+                            ColorType::Indexed => unreachable!("indexed PNG was rejected"),
+                        }
+                        if pixel_changed {
+                            changed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                });
+            Ok(())
+        })?;
+        self.pixels
+            .flush()
+            .context("could not flush structurally corrected pixel store")?;
+        Ok(changed.load(Ordering::Relaxed))
+    }
+}
+
+pub(crate) fn validate_output_target(input: &Path, output: &Path, overwrite: bool) -> Result<()> {
+    ensure!(input != output, "input and output paths must be different");
+    if output.exists() {
+        ensure!(
+            fs::canonicalize(input).with_context(|| {
+                format!("could not resolve input path: {}", input.display())
+            })? != fs::canonicalize(output).with_context(|| {
+                format!("could not resolve output path: {}", output.display())
+            })?,
+            "input and output resolve to the same file"
+        );
+    }
+    if output.exists() && !overwrite {
+        bail!(
+            "output already exists: {} (pass --overwrite to replace it)",
+            output.display()
+        );
+    }
+    Ok(())
 }
 
 /// Infer a representative DEFLATE level from the source zlib FLEVEL class.
@@ -354,7 +468,7 @@ fn source_deflate_level(path: &Path) -> Result<u8> {
     })
 }
 
-fn copy_png_verbatim(input: &Path, output: &Path, overwrite: bool) -> Result<()> {
+pub(crate) fn copy_png_verbatim(input: &Path, output: &Path, overwrite: bool) -> Result<()> {
     let parent = absolute_parent(output)?;
     fs::create_dir_all(&parent)
         .with_context(|| format!("could not create output directory: {}", parent.display()))?;
@@ -408,7 +522,12 @@ impl PixelSource for PngView<'_> {
 }
 
 impl PngStage {
-    fn linear_rgb_with_transfer(&self, x: u32, y: u32, transfer: TransferFunction) -> Option<Rgb> {
+    pub(crate) fn linear_rgb_with_transfer(
+        &self,
+        x: u32,
+        y: u32,
+        transfer: TransferFunction,
+    ) -> Option<Rgb> {
         if x >= self.info.width || y >= self.info.height {
             return None;
         }
