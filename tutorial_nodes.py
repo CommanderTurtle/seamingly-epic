@@ -632,7 +632,16 @@ class SeamFixMcBoatyV2:
                 resized_height,
                 "center",
             )[0]
-        tiles = torch.cat(decoded_tiles, dim=0)
+        tiles = torch.cat(
+            [
+                tile
+                for _, tile in sorted(
+                    zip((spec[0] for spec in _grid_specs(output_width, output_height)), decoded_tiles),
+                    key=lambda pair: pair[0],
+                )
+            ],
+            dim=0,
+        )
         info = (
             f"Input: {resized_width}x{resized_height}; "
             f"output: {output.shape[2]}x{output.shape[1]}; "
