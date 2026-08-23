@@ -15,6 +15,19 @@ line form a 3x2 adjacency graph with six regions:
 seamingly-epic --x 3084,5887 --y 4096 --in myfile.png --out fixed.png
 ```
 
+There is no separate grid or tuning configuration. Four X lines and seven Y
+lines automatically become five columns by eight rows, for example:
+
+```bash
+seamingly-epic --x 222,3333,7755,8842 \
+  --y 123,1234,2222,4444,5555,6666,7777 \
+  --in myfile.png --out output.png
+```
+
+That command derives 40 tiles. Its four vertical lines are each split across
+eight row regions, and its seven horizontal lines are each split across five
+column regions: `4*8 + 7*5 = 67` distinct shared-edge measurements.
+
 Each vertical line is scanwalked at every Y position within every row region,
 and each horizontal line at every X position within every column region. All
 accepted neighboring deltas are solved together. The resulting position-varying
@@ -22,6 +35,14 @@ profiles become smooth per-pixel correction fields on both sides of every join.
 Direct coordinates are exact and do not search nearby pixels. Use the advanced
 `correct` subcommand when coordinate refinement or tuning is intentionally
 wanted.
+
+Only genuinely shared edges are measured directly. Diagonal and distant tiles
+do not provide a trustworthy common scanline, so their relationship is carried
+through every independent path in the connected tile graph. Solving the entire
+weighted graph simultaneously is the algebraic equivalent of expanding
+cumulative adjacency rings until every tile is included. Thus a corner tile's
+gain depends on the opposite corner without pretending those corners share raw
+pixels.
 
 ## Commands
 

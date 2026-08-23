@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::{Result, bail, ensure};
 
 use crate::color::{Rgb, scale};
 
@@ -10,10 +10,31 @@ pub struct GainConstraint {
     pub weight: f64,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LocalConstraint {
+    a: usize,
+    b: usize,
+    jump: Rgb,
+    weight: f64,
+}
+
 /// Solve `gain[b] - gain[a] = -jump` for all tile adjacencies.
-#[allow(clippy::needless_range_loop)]
 pub fn solve_tile_gains(tile_count: usize, constraints: &[GainConstraint]) -> Result<Vec<Rgb>> {
     ensure!(tile_count > 0, "tile graph is empty");
+    for constraint in constraints {
+        ensure!(
+            constraint.left_or_top < tile_count && constraint.right_or_bottom < tile_count,
+            "tile constraint endpoint is outside the graph"
+        );
+        ensure!(
+            constraint.weight.is_finite() && constraint.weight >= 0.0,
+            "tile constraint weight must be finite and non-negative"
+        );
+        ensure!(
+            constraint.jump.iter().all(|value| value.is_finite()),
+            "tile constraint jump must be finite"
+        );
+    }
     if tile_count == 1 || constraints.is_empty() {
         return Ok(vec![[0.0; 3]; tile_count]);
     }
@@ -23,45 +44,28 @@ pub fn solve_tile_gains(tile_count: usize, constraints: &[GainConstraint]) -> Re
         if component.len() == 1 {
             continue;
         }
-        let component_constraints: Vec<&GainConstraint> = constraints
+        let mut local_index = vec![usize::MAX; tile_count];
+        for (index, tile) in component.iter().copied().enumerate() {
+            local_index[tile] = index;
+        }
+        let component_constraints: Vec<LocalConstraint> = constraints
             .iter()
-            .filter(|constraint| {
-                component.contains(&constraint.left_or_top)
-                    && component.contains(&constraint.right_or_bottom)
+            .filter_map(|constraint| {
+                let a = local_index[constraint.left_or_top];
+                let b = local_index[constraint.right_or_bottom];
+                (a != usize::MAX && b != usize::MAX && constraint.weight > 0.0).then_some(
+                    LocalConstraint {
+                        a,
+                        b,
+                        jump: constraint.jump,
+                        weight: constraint.weight,
+                    },
+                )
             })
             .collect();
-        for channel in 0..3 {
-            let count = component.len();
-            let mut matrix = vec![vec![0.0; count]; count];
-            let mut rhs = vec![0.0; count];
-            for constraint in &component_constraints {
-                let a = component
-                    .iter()
-                    .position(|tile| *tile == constraint.left_or_top)
-                    .expect("constraint endpoint belongs to component");
-                let b = component
-                    .iter()
-                    .position(|tile| *tile == constraint.right_or_bottom)
-                    .expect("constraint endpoint belongs to component");
-                let weight = constraint.weight.max(0.0);
-                matrix[a][a] += weight;
-                matrix[b][b] += weight;
-                matrix[a][b] -= weight;
-                matrix[b][a] -= weight;
-                rhs[a] += weight * constraint.jump[channel];
-                rhs[b] -= weight * constraint.jump[channel];
-            }
-
-            // Fix the otherwise free exposure of this connected component.
-            let anchor_weight = component_constraints
-                .iter()
-                .map(|item| item.weight)
-                .sum::<f64>()
-                .max(1.0);
-            matrix[0][0] += anchor_weight;
-
-            let solved = gaussian_solve(matrix, rhs)?;
-            let mean = solved.iter().sum::<f64>() / count as f64;
+        for channel in [0_usize, 1, 2] {
+            let solved = solve_component_channel(component.len(), &component_constraints, channel)?;
+            let mean = solved.iter().sum::<f64>() / component.len() as f64;
             for (index, value) in solved.into_iter().enumerate() {
                 result[component[index]][channel] = value - mean;
             }
@@ -100,45 +104,109 @@ fn connected_components(tile_count: usize, constraints: &[GainConstraint]) -> Ve
     components
 }
 
-fn gaussian_solve(mut matrix: Vec<Vec<f64>>, mut rhs: Vec<f64>) -> Result<Vec<f64>> {
-    let n = rhs.len();
-    for pivot in 0..n {
-        let best = (pivot..n)
-            .max_by(|left, right| {
-                matrix[*left][pivot]
-                    .abs()
-                    .total_cmp(&matrix[*right][pivot].abs())
-            })
-            .expect("pivot range is non-empty");
-        ensure!(
-            matrix[best][pivot].abs() > 1.0e-12,
-            "tile constraint graph is disconnected"
-        );
-        matrix.swap(pivot, best);
-        rhs.swap(pivot, best);
-
-        let divisor = matrix[pivot][pivot];
-        for value in &mut matrix[pivot][pivot..] {
-            *value /= divisor;
-        }
-        rhs[pivot] /= divisor;
-        let pivot_row = matrix[pivot].clone();
-
-        for row in 0..n {
-            if row == pivot {
-                continue;
-            }
-            let factor = matrix[row][pivot];
-            if factor.abs() <= 1.0e-18 {
-                continue;
-            }
-            for (column, value) in matrix[row].iter_mut().enumerate().skip(pivot) {
-                *value -= factor * pivot_row[column];
-            }
-            rhs[row] -= factor * rhs[pivot];
-        }
+/// Solve one channel of the anchored weighted graph Laplacian with
+/// Jacobi-preconditioned conjugate gradients. The matrix is never materialized:
+/// storage and each iteration are O(tiles + shared edges), so large grids do not
+/// acquire the dense O(tiles²) memory cost of Gaussian elimination.
+fn solve_component_channel(
+    tile_count: usize,
+    constraints: &[LocalConstraint],
+    channel: usize,
+) -> Result<Vec<f64>> {
+    let anchor_weight = constraints
+        .iter()
+        .map(|item| item.weight)
+        .sum::<f64>()
+        .max(1.0);
+    let mut diagonal = vec![0.0; tile_count];
+    let mut rhs = vec![0.0; tile_count];
+    for constraint in constraints {
+        diagonal[constraint.a] += constraint.weight;
+        diagonal[constraint.b] += constraint.weight;
+        rhs[constraint.a] += constraint.weight * constraint.jump[channel];
+        rhs[constraint.b] -= constraint.weight * constraint.jump[channel];
     }
-    Ok(rhs)
+    diagonal[0] += anchor_weight;
+    ensure!(
+        diagonal
+            .iter()
+            .all(|value| value.is_finite() && *value > 0.0),
+        "tile constraint graph is disconnected"
+    );
+    ensure!(
+        rhs.iter().all(|value| value.is_finite()),
+        "global tile solver right-hand side overflowed"
+    );
+
+    let rhs_norm = dot(&rhs, &rhs).sqrt();
+    ensure!(rhs_norm.is_finite(), "global tile solver norm overflowed");
+    if rhs_norm <= f64::EPSILON {
+        return Ok(vec![0.0; tile_count]);
+    }
+
+    let mut solution = vec![0.0; tile_count];
+    let mut residual = rhs;
+    let mut preconditioned: Vec<f64> = residual
+        .iter()
+        .zip(&diagonal)
+        .map(|(value, divisor)| value / divisor)
+        .collect();
+    let mut direction = preconditioned.clone();
+    let mut residual_dot_preconditioned = dot(&residual, &preconditioned);
+    let tolerance = (rhs_norm * 1.0e-11).max(1.0e-13);
+    let max_iterations = tile_count.saturating_mul(32).clamp(256, 1_000_000);
+
+    for _ in 0..max_iterations {
+        let product = laplacian_multiply(&direction, constraints, anchor_weight);
+        let denominator = dot(&direction, &product);
+        if !denominator.is_finite() || denominator <= 1.0e-24 {
+            bail!("global tile solver encountered a non-positive graph direction");
+        }
+        let alpha = residual_dot_preconditioned / denominator;
+        for index in 0..tile_count {
+            solution[index] += alpha * direction[index];
+            residual[index] -= alpha * product[index];
+        }
+        if dot(&residual, &residual).sqrt() <= tolerance {
+            return Ok(solution);
+        }
+
+        for index in 0..tile_count {
+            preconditioned[index] = residual[index] / diagonal[index];
+        }
+        let next_dot = dot(&residual, &preconditioned);
+        ensure!(
+            next_dot.is_finite() && residual_dot_preconditioned > 0.0,
+            "global tile solver produced a non-finite residual"
+        );
+        let beta = next_dot / residual_dot_preconditioned;
+        for index in 0..tile_count {
+            direction[index] = preconditioned[index] + beta * direction[index];
+        }
+        residual_dot_preconditioned = next_dot;
+    }
+
+    bail!("global tile solver did not converge for a {tile_count}-tile connected component")
+}
+
+fn laplacian_multiply(
+    input: &[f64],
+    constraints: &[LocalConstraint],
+    anchor_weight: f64,
+) -> Vec<f64> {
+    let mut output = vec![0.0; input.len()];
+    for constraint in constraints {
+        let difference = input[constraint.a] - input[constraint.b];
+        let weighted = constraint.weight * difference;
+        output[constraint.a] += weighted;
+        output[constraint.b] -= weighted;
+    }
+    output[0] += anchor_weight * input[0];
+    output
+}
+
+fn dot(left: &[f64], right: &[f64]) -> f64 {
+    left.iter().zip(right).map(|(a, b)| a * b).sum()
 }
 
 pub fn limit_gains(gains: &mut [Rgb], strength: f64, max_stops: f64) {

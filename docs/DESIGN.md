@@ -38,6 +38,18 @@ used only when accepted constraints connect every tile. A disconnected graph
 falls back to bounded local correction so it cannot create a new join against
 an unmeasured neighbor.
 
+This solve is global rather than a sequence of pairwise edits. A matrix-free,
+Jacobi-preconditioned conjugate-gradient solve repeatedly applies the weighted
+tile-graph Laplacian. Successive directions carry information through expanding
+adjacency depths while retaining all earlier constraints; convergence couples
+every tile in the connected component to every direct measurement and every
+alternate path. A diagonally touching tile participates through its two
+edge-connected paths rather than through an invented one-pixel corner sample.
+
+The sparse representation stores only tiles and shared edges. Its memory is
+`O(tiles + edges)`, rather than the `O(tiles^2)` matrix that would make large or
+unusually shaped grids an artificial special case.
+
 ## Residual field
 
 After global tile gains, the remaining boundary profile can differ at every
@@ -47,6 +59,13 @@ raised-cosine ramp. At an intersection, the X- and Y-derived fields add. The
 engine evaluates this two-dimensional "smokemap" independently for every output
 pixel; only the correction field is smoothed, never the image or its spatial
 detail.
+
+The global field and local field have deliberately different evidence. Global
+per-tile gains contain the all-depth graph relationship. The position-varying
+residual is supported by the specific shared scanline that measured it and is
+feathered into its two incident tiles. Broadcasting one local texture-dependent
+residual into a distant tile would invent a color observation that does not
+exist.
 
 The comparison is not a request to make two neighboring source pixels
 identical. Real scene gradients and edges can cross a tile boundary. Four

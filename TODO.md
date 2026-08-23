@@ -7,10 +7,12 @@
 - [x] Preserve explicit alpha, bit depth, and recognized color/text/ComfyUI metadata.
 - [x] Parse explicit X/Y seam coordinates and equal-grid shorthand.
 - [x] Add the minimal `--x/--y/--in/--out` interface and verify irregular grids.
+- [x] Keep arbitrary coordinate lists completely configuration-free.
 - [x] Verify RGB24/RGBA32/RGB48/RGBA64 sample-depth handling explicitly.
 - [x] Refine nominal grid lines to a materially stronger nearby persistent boundary step.
 - [x] Estimate robust per-channel log-linear boundary offsets.
 - [x] Solve globally consistent per-tile white-balance/exposure gains.
+- [x] Propagate every connected constraint through all adjacency depths with a sparse graph solve.
 - [x] Prevent disconnected constraint graphs from creating new tile boundaries.
 - [x] Add confidence gating, correction limits, and a report-only mode.
 - [x] Add smooth local residual correction without spatially filtering image detail.

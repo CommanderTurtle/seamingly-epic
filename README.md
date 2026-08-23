@@ -75,12 +75,23 @@ against its actual neighboring regions:
 seamingly-epic --x 3084,5887 --y 4096 --in myfile.png --out fixed.png
 ```
 
+Nothing else is required. For example, this derives a 5-column by 8-row layout
+with 40 tiles and 67 separately scanwalked shared-edge segments:
+
+```bash
+seamingly-epic --x 222,3333,7755,8842 \
+  --y 123,1234,2222,4444,5555,6666,7777 \
+  --in myfile.png --out output.png
+```
+
 Coordinates in direct mode are exact (`refine_radius=0`). The `analyze` and
 `correct` subcommands retain advanced controls and equal-grid shorthand.
 Every shared edge is scanwalked at every position by default. Its varying
 residual becomes a smooth correction field evaluated independently for every
 output pixel, while the globally solved per-tile gains reconcile all grid
-neighbors and intersections together.
+neighbors and intersections together. The matrix-free graph solve propagates
+those relationships through every adjacency depth until the complete connected
+grid agrees; no multiscale or tile-count setting is exposed to the user.
 
 Analyze the standard 8192x8192 four-quadrant result without changing it:
 
