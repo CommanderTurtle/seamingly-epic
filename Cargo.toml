@@ -1,0 +1,38 @@
+[package]
+name = "seamingly-epic"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Bounded-memory photometric seam correction for independently refined image tiles"
+
+[lib]
+name = "seamingly_epic"
+path = "src/lib.rs"
+
+[[bin]]
+name = "seamingly-epic"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.48", features = ["derive"] }
+memmap2 = "0.9.8"
+png = "0.18.0"
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.23.0"
+
+[dev-dependencies]
+approx = "0.5.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "warn"
+
+[lints.clippy]
+all = "warn"
