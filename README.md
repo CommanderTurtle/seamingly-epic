@@ -101,10 +101,10 @@ All boundaries are reconciled at once by the zero-mean weighted least-squares
 problem
 
 $$
-\mathbf g^\star=
-\underset{\sum_{i\in V}\mathbf g_i=\mathbf 0}{\operatorname{arg\,min}}
-\sum_{(i,j)\in E} w_{ij}
-\left\|\left(\mathbf g_j-\mathbf g_i\right)+\mathbf d_{ij}\right\|_2^2.
+\mathbf g^\star =
+\arg\min_{\sum_{i\in V}\mathbf g_i=\mathbf 0}
+\sum_{(i,j)\in E} w_{ij}\,
+\left\lVert (\mathbf g_j-\mathbf g_i)+\mathbf d_{ij} \right\rVert_2^2.
 $$
 
 With oriented incidence matrix $B$, diagonal edge-weight matrix $W$, and the
@@ -133,13 +133,14 @@ preconditioner $M = \text{diag}(\widetilde L_W)$, its matrix-free
 conjugate-gradient solve works in the Krylov spaces
 
 $$
-\mathcal K_k(M^{-1}\widetilde L_W,M^{-1}\mathbf b)=
+\mathcal K_k(M^{-1}\widetilde L_W,\,M^{-1}\mathbf b)
+=
 \text{span}\!\left\{
-M^{-1}\mathbf b,
-(M^{-1}\widetilde L_W)M^{-1}\mathbf b,
-(M^{-1}\widetilde L_W)^2M^{-1}\mathbf b,
-\ldots,
-(M^{-1}\widetilde L_W)^{k-1}M^{-1}\mathbf b
+M^{-1}\mathbf b,\;
+(M^{-1}\widetilde L_W)M^{-1}\mathbf b,\;
+(M^{-1}\widetilde L_W)^2 M^{-1}\mathbf b,\;
+\ldots,\;
+(M^{-1}\widetilde L_W)^{k-1} M^{-1}\mathbf b
 \right\}.
 $$
 
@@ -180,7 +181,9 @@ derived distance $h$ to that tile's midpoint,
 $$
 \phi(s;h)=
 \begin{cases}
-\tfrac12\,[1+\cos(\pi s/h)] & \text{if } 0\le s<h,\\
+\tfrac12\,[1+\cos(\pi s/h)] & \text{if } 0\le s<h,\
+
+\[6pt]
 0 & \text{if } s\ge h.
 \end{cases}
 $$
