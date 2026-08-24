@@ -133,8 +133,7 @@ preconditioner $M = \text{diag}(\widetilde L_W)$, its matrix-free
 conjugate-gradient solve works in the Krylov spaces
 
 $$
-\mathcal K_k(M^{-1}\widetilde L_W,\,M^{-1}\mathbf b)
-=
+\mathcal K_k(M^{-1}\widetilde L_W,\,M^{-1}\mathbf b)=
 \text{span}\!\left\{
 M^{-1}\mathbf b,\;
 (M^{-1}\widetilde L_W)M^{-1}\mathbf b,\;
