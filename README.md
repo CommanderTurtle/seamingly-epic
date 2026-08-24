@@ -4,11 +4,11 @@ A native rust program built for 8192x8192 (or higher) grid seamline removal for 
 
 ### Before:
 
-
+![avif1](https://huggingface.co/sHEL1562/shelling/resolve/main/src/before1.avif)
 
 ### After:
 
-
+![avif2](https://huggingface.co/sHEL1562/shelling/resolve/main/src/after1.avif)
 
 For all starting out. Everything needed is in the /workflows/ folder.
 
@@ -18,11 +18,11 @@ Including [quick start](./workflows/quickstart.txt)
 
 ### Before:
 
-
+![png1](https://huggingface.co/sHEL1562/shelling/resolve/main/src/before.png)
 
 ### After:
 
-
+![png2](https://huggingface.co/sHEL1562/shelling/resolve/main/src/after.png)
 
 ---
 
