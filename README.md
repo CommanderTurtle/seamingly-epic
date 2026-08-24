@@ -190,7 +190,7 @@ $$
 $$
 \alpha(d,t)=
 \begin{cases}
-\tfrac12\,[1+\cos\!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t),\
+\tfrac12\,[1+\cos\!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t)\
 
 \[6pt]
 0 & \text{if } d \ge D(t).
@@ -368,7 +368,7 @@ structural-boundary distance at along-seam position `t`, the reference weight is
 $$
 \alpha(d,t)=
 \begin{cases}
-\tfrac12\,[1+\cos\!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t)\
+\tfrac12\,[1+\cos!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t)\
 
 \[6pt]
 0 & \text{if } d \ge D(t).
