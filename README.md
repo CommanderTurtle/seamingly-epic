@@ -419,7 +419,7 @@ is smoothed and joined to the robust center gain; it never becomes a gain on
 the input image. For radius `r`, angle `theta`, and detected star radius
 `R(theta)`, reference opacity is
 
-$$
+```math \
 \alpha(r,\theta)=
 \begin{cases}
 \tfrac12\,[1+\cos\!\bigl(\pi r / R(\theta)\bigr)] & \text{if } 0 \le r < R(\theta),\
@@ -427,7 +427,7 @@ $$
 \[6pt]
 0 & \text{if } r \ge R(\theta).
 \end{cases}
-$$
+```
 
 The seam-free reference is effectively opaque at dead center and becomes
 exactly transparent at its data-derived edge. The already-perfect
