@@ -129,12 +129,12 @@ $$
 $$
 
 solves each RGB channel, and recenters the result to zero mean. With Jacobi
-preconditioner $M=\operatorname{diag}(\widetilde L_W)$, its matrix-free
+preconditioner $M = \text{diag}(\widetilde L_W)$, its matrix-free
 conjugate-gradient solve works in the Krylov spaces
 
 $$
 \mathcal K_k(M^{-1}\widetilde L_W,M^{-1}\mathbf b)=
-\operatorname{span}\!\left\{
+\text{span}\!\left\{
 M^{-1}\mathbf b,
 (M^{-1}\widetilde L_W)M^{-1}\mathbf b,
 (M^{-1}\widetilde L_W)^2M^{-1}\mathbf b,
@@ -180,8 +180,8 @@ derived distance $h$ to that tile's midpoint,
 $$
 \phi(s;h)=
 \begin{cases}
-\tfrac12[1+\cos(\pi s/h)],&0\le s<h,\\
-0,&s\ge h.
+\tfrac12\,[1+\cos(\pi s/h)] & \text{if } 0\le s<h,\\
+0 & \text{if } s\ge h.
 \end{cases}
 $$
 
@@ -386,8 +386,10 @@ structural-boundary distance at along-seam position `t`, the reference weight is
 $$
 \alpha(d,t)=
 \begin{cases}
-\tfrac12[1+\cos(\pi d/D(t))],&0\le d<D(t),\\
-0,&d\ge D(t).
+\tfrac12\,[1+\cos\!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t),\
+
+\[6pt]
+0 & \text{if } d \ge D(t).
 \end{cases}
 $$
 
@@ -438,8 +440,10 @@ the input image. For radius `r`, angle `theta`, and detected star radius
 $$
 \alpha(r,\theta)=
 \begin{cases}
-\tfrac12[1+\cos(\pi r/R(\theta))],&0\le r<R(\theta),\\
-0,&r\ge R(\theta).
+\tfrac12\,[1+\cos\!\bigl(\pi r / R(\theta)\bigr)] & \text{if } 0 \le r < R(\theta),\
+
+\[6pt]
+0 & \text{if } r \ge R(\theta).
 \end{cases}
 $$
 
