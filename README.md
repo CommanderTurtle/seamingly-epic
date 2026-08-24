@@ -178,7 +178,6 @@ cosine-squared) wave. For normal distance $s$ from the seam and automatically
 derived distance $h$ to that tile's midpoint,
 
 $$
-\[
 \phi(s;h)=
 \begin{cases}
 \tfrac12\,[1+\cos\!\bigl(\pi s / h\bigr)]
@@ -186,7 +185,6 @@ $$
 0
   & \text{if } s \ge h.
 \end{cases}
-\]
 $$
 
 $$
