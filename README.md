@@ -1,6 +1,6 @@
 # Seamingly Epic
 
-A native rust program built for 8192x8192 (or higher) grid seemline removal for Nvidia Pixel DiT.
+A native rust program built for 8192x8192 (or higher) grid seamline removal for Nvidia Pixel DiT.
 
 ### Before:
 
