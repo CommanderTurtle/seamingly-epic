@@ -1,0 +1,32 @@
+Set below like env vars... run once. Replace exe with actual built dir
+
+(make exe from root git clone)
+cargo build --release
+
+in, vert, horz, and midl become full paths like "C:\Users\me\some\folder\file.png" <-- (right click, copy as path, to get this) quotes included
+
+Example: $in="C:\path\to\file1.png"; $vert="C:\path\to\file2.png"; $horz="C:\path\to\file3.png"; $midl="C:\path\to\file4.png"; `
+...
+This whole block is safe to paste in powershell as-is:
+
+$in=; $vert=; $horz=; $midl=; `
+$mid="4096"; `
+$dir = [IO.Path]::GetDirectoryName($in); $base = [IO.Path]::GetFileNameWithoutExtension($in); $ext = [IO.Path]::GetExtension($in); if($base -match '(.*-)(\d+)$'){ $prefix=$Matches[1]; $num=[int]$Matches[2] } else { $prefix=$base+'-'; $num=1 }; do { $num++ } while (Test-Path "$dir\$prefix$num$ext"); `
+$fin1 = "$dir\$prefix$num$ext"; `
+& "~\Desktop\transfer\seemingly-epic\target\release\seamingly-epic.exe" --x $mid --y $mid --in $in --out $fin1; `
+$in=$vert; `
+$mid="4096"; `
+$dir = [IO.Path]::GetDirectoryName($in); $base = [IO.Path]::GetFileNameWithoutExtension($in); $ext = [IO.Path]::GetExtension($in); if($base -match '(.*-)(\d+)$'){ $prefix=$Matches[1]; $num=[int]$Matches[2] } else { $prefix=$base+'-'; $num=1 }; do { $num++ } while (Test-Path "$dir\$prefix$num$ext"); `
+$vert1 = "$dir\$prefix$num$ext"; `
+& "~\Desktop\transfer\seemingly-epic\target\release\seamingly-epic.exe" --y $mid --in $in --out $vert1; `
+$in=$horz; `
+$mid="4096"; `
+$dir = [IO.Path]::GetDirectoryName($in); $base = [IO.Path]::GetFileNameWithoutExtension($in); $ext = [IO.Path]::GetExtension($in); if($base -match '(.*-)(\d+)$'){ $prefix=$Matches[1]; $num=[int]$Matches[2] } else { $prefix=$base+'-'; $num=1 }; do { $num++ } while (Test-Path "$dir\$prefix$num$ext"); `
+$horz1 = "$dir\$prefix$num$ext"; `
+& "~\Desktop\transfer\seemingly-epic\target\release\seamingly-epic.exe" --x $mid --in $in --out $horz1; `
+$dir = [IO.Path]::GetDirectoryName($in); $base = [IO.Path]::GetFileNameWithoutExtension($in); $ext = [IO.Path]::GetExtension($in); if($base -match '(.*-)(\d+)$'){ $prefix=$Matches[1]; $num=[int]$Matches[2] } else { $prefix=$base+'-'; $num=1 }; do { $num++ } while (Test-Path "$dir\$prefix$num$ext"); `
+$fin2 = "$dir\$prefix$num$ext"; `
+& "~\Desktop\transfer\seemingly-epic\target\release\seamingly-epic.exe" strucfix --x $mid --y $mid --in $fin1 --out $fin2 --xcross $horz1 --ycross $vert1; `
+$dir = [IO.Path]::GetDirectoryName($in); $base = [IO.Path]::GetFileNameWithoutExtension($in); $ext = [IO.Path]::GetExtension($in); if($base -match '(.*-)(\d+)$'){ $prefix=$Matches[1]; $num=[int]$Matches[2] } else { $prefix=$base+'-'; $num=1 }; do { $num++ } while (Test-Path "$dir\$prefix$num$ext"); `
+$fin3 = "$dir\$prefix$num$ext"; `
+& "~\Desktop\transfer\seemingly-epic\target\release\seamingly-epic.exe" centerfix --x $mid --y $mid --in $fin2 --out $fin3 --center $midl

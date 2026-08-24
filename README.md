@@ -1,5 +1,31 @@
 # Seamingly Epic
 
+A native rust program built for 8192x8192 (or higher) grid seemline removal for Nvidia Pixel DiT.
+
+### Before:
+
+
+
+### After:
+
+
+
+For all starting out. Everything needed is in the /workflows/ folder.
+
+Including [quick start](./workflows/quickstart.txt)
+
+### Don't see it?
+
+### Before:
+
+
+
+### After:
+
+
+
+---
+
 Seamingly Epic corrects straight exposure and white-balance boundaries between
 independently refined image tiles. It targets the exact case where four
 1024-to-4096 PiD passes are assembled into one 8192x8192 image and the join at
