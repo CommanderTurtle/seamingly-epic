@@ -177,7 +177,7 @@ Each endpoint is then carried inward with a raised-cosine (equivalently,
 cosine-squared) wave. For normal distance $s$ from the seam and automatically
 derived distance $h$ to that tile's midpoint,
 
-$$
+```math \
 \phi(s;h)=
 \begin{cases}
 \tfrac12[1+\cos(\pi s/h)]\text{,} & \text{if } 0\le s<h\
@@ -185,9 +185,9 @@ $$
 \[6pt]
 0 & \text{if } s\ge h
 \end{cases}
-$$
+```
 
-$$
+```math \
 \alpha(d,t)=
 \begin{cases}
 \tfrac12\,[1+\cos\!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t)\
@@ -195,7 +195,7 @@ $$
 \[6pt]
 0 & \text{if } d \ge D(t).
 \end{cases}
-$$
+```
 
 Thus $\phi(0;h)=1$, $\phi(h;h)=0$, and the derivative is zero at both ends.
 The seam closes at full strength without a hard transition, while every tile's
@@ -365,7 +365,7 @@ profile at the already-corrected quadrant join.
 If `d` is normal distance from the original join and `D(t)` is the selected
 structural-boundary distance at along-seam position `t`, the reference weight is
 
-$$
+```math \
 \alpha(d,t)=
 \begin{cases}
 \tfrac12\,[1+\cos!\bigl(\pi d / D(t)\bigr)] & \text{if } 0 \le d < D(t)\
@@ -373,7 +373,7 @@ $$
 \[6pt]
 0 & \text{if } d \ge D(t).
 \end{cases}
-$$
+```
 
 Thus the matched overlap render is opaque at the original structural seam and
 approaches exact transparency at its irregular boundary. The corrected base is
