@@ -134,13 +134,13 @@ conjugate-gradient solve works in the Krylov spaces
 
 $$
 \mathcal K_k(M^{-1}\widetilde L_W,\,M^{-1}\mathbf b)=
-\text{span}\!\left\{
+\text{span}\!\bigl\{
 M^{-1}\mathbf b,\;
-(M^{-1}\widetilde L_W)M^{-1}\mathbf b,\;
-(M^{-1}\widetilde L_W)^2 M^{-1}\mathbf b,\;
+(M^{-1}\widetilde L_W)\,M^{-1}\mathbf b,\;
+(M^{-1}\widetilde L_W)^2\,M^{-1}\mathbf b,\;
 \ldots,\;
-(M^{-1}\widetilde L_W)^{k-1} M^{-1}\mathbf b
-\right\}.
+(M^{-1}\widetilde L_W)^{k-1}\,M^{-1}\mathbf b
+\bigr\}.
 $$
 
 One Laplacian multiplication communicates across one shared boundary;
