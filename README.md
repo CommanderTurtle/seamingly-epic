@@ -180,8 +180,7 @@ derived distance $h$ to that tile's midpoint,
 $$
 \phi(s;h)=
 \begin{cases}
-\tfrac12\,[1+\cos(\pi s/h)] & \text{if } 0\le s<h,\
-
+\tfrac12\,[1+\cos(\pi s/h)] & \text{if } 0\le s<h,
 \[6pt]
 0 & \text{if } s\ge h.
 \end{cases}
@@ -253,53 +252,23 @@ The native path supports regular `1x2`, `2x1`, `2x2`, `5x5`, and larger grids,
 plus arbitrary output-pixel X/Y seam coordinates. It is entirely local and has
 no network, model, telemetry, or server dependency.
 
-## Install as a ComfyUI custom node
+#### head over to [quick start](./workflows/quickstart.txt)
 
-Clone this repository directly under `ComfyUI/custom_nodes`, then build its
-small Rust binary once.
+1. Pipe genned image latent endpoint directly into input (using this workflow json setup)
+2. Gen full,horizontal,vertical,mid from the workflow - (~100s from prompt)
+3. Run [quick start](./workflows/quickstart.txt) copypasta verbatim (i point to all 4 files in downloads folder) (~10s)
+4. Enjoy 8k image from 2048 gen, thanks to Nvidia PiD
 
-Windows PowerShell:
+> Step 3 basically performs this order:
 
-```powershell
-Set-Location C:\path\to\ComfyUI\custom_nodes\ComfyUI-Seamingly-Epic
-.\setup.ps1
-```
+"Take image 1, perform color corrective pass on x,y. Take image 2(vert), do same with just y. Take image 3(horz), do same with just x. Apply the crossblobber (this is a structural pass). Take this output (image 4) and apply a feathered circle structural diff from the center of the centered image 5 (mid)." You're left with just image 6 in the end. Rust does this all in seconds. The powershell script in the included .txt just helps for programmatically doing this all automatically with 4 variable names; each is solely a `RightClick->Copy-File-Path` paste.
 
-Linux:
-
-```bash
-cd /path/to/ComfyUI/custom_nodes/ComfyUI-Seamingly-Epic
-./setup.sh
-```
-
-Restart ComfyUI. The nodes appear under `image / seamingly epic`:
-
-- **Seamingly Epic — Native IMAGE**: float32 in/out, correction-area mask, and
-  JSON diagnostics. Use it inside an ordinary workflow.
-- **Seamingly Epic — Streaming PNG**: memory-mapped
-  RGB24/RGBA32/RGB48/RGBA64 PNG path. Use it for 8K/16K images that should not
-  become another full Comfy tensor.
-- **Seamingly Epic — Reference Repair**: the tutorial's painted-reference
-  composite path in one node.
-
-The complete tutorial workflow is tracked at
-[`workflows/SeamFixVer2.1.original.json`](workflows/SeamFixVer2.1.original.json).
-It is the original 45-node/41-link JSON payload, not a visually similar
-reconstruction. Import it directly. The legacy serialized node type names are
-registered by this pack, so MaraScott, WAS Node Suite, Impact Pack, and Art
-Venture are not required. Install only current ComfyUI plus KJNodes; VAE Utils
-may remain installed for the surrounding PiD workflow.
-
-ComfyUI already supplies Python, PyTorch, and NumPy; the project adds no Python
-packages. Rust/Cargo is only needed to run the setup script. See
-[docs/COMFYUI.md](docs/COMFYUI.md) for exact wiring and mask behavior.
-
-## Native CLI
+---
 
 Build directly:
 
 ```bash
-cargo build --release --locked
+cargo build --release
 ```
 
 The normal interface is deliberately just input, output, and exact seam lines:
