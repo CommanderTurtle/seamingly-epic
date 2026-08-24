@@ -181,7 +181,7 @@ $$
 \phi(s;h)=
 \begin{cases}
 \tfrac12[1+\cos(\pi s/h)]\text{,} & \text{if } 0\le s<h,\\
-〚〛 & ︵6pt︶\\
+Ａ & ［６ｐｔ］\\
 0 & \text{if } s\ge h.
 \end{cases}
 $$
