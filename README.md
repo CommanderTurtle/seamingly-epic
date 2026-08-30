@@ -12,7 +12,7 @@ A native rust program built for 8192x8192 (or higher) grid seamline removal for 
 
 For all starting out. Everything needed is in the /workflows/ folder.
 
-Including [quick start](./workflows/quickstart.txt)
+Including [quick start](./workflows/quickstart.md)
 
 ### Don't see it?
 
@@ -263,11 +263,11 @@ The native path supports regular `1x2`, `2x1`, `2x2`, `5x5`, and larger grids,
 plus arbitrary output-pixel X/Y seam coordinates. It is entirely local and has
 no network, model, telemetry, or server dependency.
 
-#### head over to [quick start](./workflows/quickstart.txt)
+#### head over to [quick start](./workflows/quickstart.md)
 
 1. Pipe genned image latent endpoint directly into input (using this workflow json setup)
 2. Gen full,horizontal,vertical,mid from the workflow - (~100s from prompt)
-3. Run [quick start](./workflows/quickstart.txt) copypasta verbatim (i point to all 4 files in downloads folder) (~10s)
+3. Run [quick start](./workflows/quickstart.md) copypasta verbatim (i point to all 4 files in downloads folder) (~10s)
 4. Enjoy 8k image from 2048 gen, thanks to Nvidia PiD
 
 > Step 3 basically performs this order:
